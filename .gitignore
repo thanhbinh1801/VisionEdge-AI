@@ -1,0 +1,39 @@
+# Environment variables
+.env
+.env.local
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.venv/
+
+# Pytest & Cache
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Databases & Media storage
+*.db
+*.sqlite3
+data/clips/*
+!data/clips/.gitkeep
+data/crops/*
+!data/crops/.gitkeep
+data/test_clips/
+
+# Node / Frontend (if applicable)
+node_modules/
+dist/
+build/
+
+# IDE & OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
