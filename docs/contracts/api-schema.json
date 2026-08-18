@@ -1,0 +1,104 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "SentriAI Mini Global REST API Specification",
+  "version": "1.0.0",
+  "endpoints": {
+    "GET /api/health": {
+      "summary": "Health check system status",
+      "responses": {
+        "200": {
+          "type": "object",
+          "properties": {
+            "status": { "type": "string", "enum": ["ok", "degraded"] },
+            "uptime_seconds": { "type": "number" },
+            "timestamp": { "type": "string", "format": "date-time" }
+          },
+          "required": ["status", "uptime_seconds", "timestamp"]
+        }
+      }
+    },
+    "GET /api/events": {
+      "summary": "Query event history with filters",
+      "parameters": {
+        "camera_id": { "type": "string" },
+        "severity": { "type": "integer", "enum": [1, 2, 3] },
+        "limit": { "type": "integer", "default": 50 }
+      },
+      "responses": {
+        "200": {
+          "type": "object",
+          "properties": {
+            "data": {
+              "type": "array",
+              "items": { "$ref": "#/definitions/EventItem" }
+            },
+            "total": { "type": "integer" }
+          }
+        }
+      }
+    },
+    "PATCH /api/events/{id}/correct-plate": {
+      "summary": "Manual plate fallback correction for low confidence OCR",
+      "requestBody": {
+        "type": "object",
+        "properties": {
+          "corrected_plate": { "type": "string" },
+          "operator_note": { "type": "string" }
+        },
+        "required": ["corrected_plate"]
+      },
+      "responses": {
+        "200": {
+          "type": "object",
+          "properties": {
+            "success": { "type": "boolean" },
+            "event": { "$ref": "#/definitions/EventItem" }
+          }
+        }
+      }
+    },
+    "POST /api/chat/query": {
+      "summary": "AI Event Natural Language Text-to-SQL Question Answering",
+      "requestBody": {
+        "type": "object",
+        "properties": {
+          "question": { "type": "string" }
+        },
+        "required": ["question"]
+      },
+      "responses": {
+        "200": {
+          "type": "object",
+          "properties": {
+            "answer": { "type": "string" },
+            "generated_sql": { "type": "string" },
+            "clip_url": { "type": "string" },
+            "related_events": {
+              "type": "array",
+              "items": { "$ref": "#/definitions/EventItem" }
+            }
+          },
+          "required": ["answer", "clip_url"]
+        }
+      }
+    }
+  },
+  "definitions": {
+    "EventItem": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "camera_id": { "type": "string" },
+        "event_type": { "type": "string", "enum": ["lpr_detected", "zone_violation", "custom_object_detected"] },
+        "severity": { "type": "integer", "enum": [1, 2, 3] },
+        "license_plate": { "type": "string" },
+        "ocr_confidence": { "type": "number" },
+        "object_class": { "type": "string" },
+        "zone_name": { "type": "string" },
+        "clip_url": { "type": "string" },
+        "created_at": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "camera_id", "event_type", "severity", "created_at"]
+    }
+  }
+}
