@@ -1,9 +1,9 @@
 ---
 artifact: REQUIREMENTS.md
-version: 1.3.0
+version: 1.4.0
 owner: collect-requirements
 status: approved
-updated_at: 2026-08-19T11:02:20+07:00
+updated_at: 2026-08-19T14:25:00+07:00
 ---
 
 Discovery status: confirmed
@@ -18,6 +18,16 @@ Hệ thống cung cấp giải pháp giám sát an ninh camera AI tự động c
 ---
 
 ## 2. Nhật ký Thay đổi Yêu cầu (Change Requests Audit Trail)
+
+## CR-001 Baseline Business Logic & Polygon Zone Refinements
+
+- Business delta: Chuẩn hóa phân loại 8 loại phương tiện/người trong bãi kiểm (Container, Xe tải, Xe nâng, Xe cẩu, Xe con, Xe máy, Xe đạp, Người); phân định danh sách Cho phép / Bị cấm cho từng zone; chuẩn hóa xe quen (đã xác thực) / xe lạ (chưa ghi nhận); nâng cấp công cụ vẽ zone đa giác SVG 4 thao tác (thêm góc, kéo đỉnh, kéo điểm giữa cạnh, kéo thân); xây dựng công cụ gán nhãn đối tượng Bounding Box tương tác (import hình/video frame, khoanh ô bao, phân loại người/xe, lưu mẫu & tự động đồng bộ sang mọi zone).
+- Affected requirement IDs: `REQ-002`, `REQ-005`, `REQ-006`, `REQ-007`
+- Previous meaning: Phân loại đối tượng cứng (Person, Truck, Forklift), quy tắc zone mâu thuẫn, phân loại xe cũ (WHITELIST/BLACKLIST/CONTRACTOR/VISITOR), vẽ zone tĩnh thiếu thao tác kéo thả và công cụ gán nhãn mẫu custom chưa hỗ trợ Bounding Box/tải hình.
+- Source: Đánh giá kiểm thử Prototype bãi kiểm và cài đặt từ Khách hàng / Product Owner
+- Status: active
+
+---
 
 ## CR-002 Modernization of Web UI Stack to React Framework & YOLOv26
 

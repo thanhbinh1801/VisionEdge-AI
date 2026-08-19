@@ -122,6 +122,46 @@ class CustomLabel(Base):
         CheckConstraint("sample_count >= 0", name="check_custom_label_sample_count"),
     )
 
+class DatasetSource(Base):
+    __tablename__ = "dataset_sources"
+
+    id = Column(String(64), primary_key=True)
+    name = Column(String(128), nullable=False)
+    kind = Column(String(16), nullable=False)  # 'img' | 'video'
+    url = Column(String(512), nullable=False)
+    duration_seconds = Column(Float, nullable=True)
+    total_frames = Column(Integer, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+    samples = relationship("BBoxSample", back_populates="source", cascade="all, delete-orphan")
+
+    __table_args__ = (
+        CheckConstraint("kind IN ('img', 'video')", name="check_dataset_source_kind"),
+    )
+
+class BBoxSample(Base):
+    __tablename__ = "bbox_samples"
+
+    id = Column(String(64), primary_key=True)
+    label_id = Column(String(64), nullable=False)
+    source_id = Column(String(64), ForeignKey("dataset_sources.id", ondelete="CASCADE"), nullable=False)
+    frame_index = Column(Integer, nullable=True)
+    x = Column(Float, nullable=False)
+    y = Column(Float, nullable=False)
+    w = Column(Float, nullable=False)
+    h = Column(Float, nullable=False)
+    category = Column(String(32), nullable=False)
+    label_name = Column(String(128), nullable=False)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+    source = relationship("DatasetSource", back_populates="samples")
+
+    __table_args__ = (
+        CheckConstraint("category IN ('person', 'vehicle_shape')", name="check_bbox_sample_category"),
+        Index("idx_bbox_samples_label", "label_id"),
+        Index("idx_bbox_samples_source", "source_id"),
+    )
+
 class KpiRealtimeCache(Base):
     __tablename__ = "kpi_realtime_cache"
 

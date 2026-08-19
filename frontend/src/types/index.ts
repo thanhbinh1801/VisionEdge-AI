@@ -1,5 +1,94 @@
+export type TabId = 'mon' | 'area' | 'set' | 'qa';
+export type SubTabId = 'label' | 'zone' | 'obj';
 export type SeverityLevel = 1 | 2 | 3;
 
+export interface VehicleRecord {
+  plate: string;
+  type: string;
+  visits: number;
+  last: string;
+  tag: 'quen' | 'la';
+  tint?: string;
+}
+
+export interface GateEvent {
+  id: string;
+  time: string;
+  plate: string;
+  zone: string;
+  conf: number | null;
+}
+
+export interface AreaEvent {
+  id: string;
+  time: string;
+  obj: string;
+  zone: string;
+  st: string;
+  ok: boolean;
+}
+
+export interface ZoneConfig {
+  id: string;
+  name: string;
+  camera_id?: string;
+  color: string;
+  points: [number, number][]; // Relative coordinates [x, y] in percentage (0 to 100)
+  types: Record<string, number>; // Label name -> 1 (allowed/✓) or 0 (forbidden/✕)
+  allowed_classes?: string[];
+  forbidden_classes?: string[];
+}
+
+export interface ObjectLabel {
+  id: string;
+  name: string;
+  kind: 'nguoi' | 'xe';
+  tint: string;
+  samples: number;
+}
+
+export interface AnnotationSource {
+  id: string;
+  name: string;
+  kind: 'img' | 'video';
+  img?: string;
+  tint?: string;
+}
+
+export interface AnnotationSample {
+  id: string;
+  labelId: string;
+  srcId: string;
+  frame?: number | null;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  session?: number;
+}
+
+export interface AIChatMessage {
+  id: string;
+  role: 'user' | 'ai';
+  text: string;
+  clip?: {
+    cam: string;
+    from: string;
+    to: string;
+    title: string;
+    boxColor: string;
+    boxLabel: string;
+    tint: string;
+  };
+}
+
+export interface KpiCardData {
+  label: string;
+  value: string;
+  color: string;
+}
+
+/* Backward compatibility legacy types */
 export interface EventRecord {
   id: string;
   timestamp: string;
@@ -15,16 +104,6 @@ export interface EventRecord {
   cropUrl?: string;
   videoClipUrl?: string;
   status: 'NEW' | 'ACKNOWLEDGED' | 'RESOLVED';
-}
-
-export interface ZoneConfig {
-  id: string;
-  name: string;
-  cameraId: string;
-  polygonPoints: [number, number][]; // Relative coordinates [x, y] from 0.0 to 1.0
-  severity: SeverityLevel;
-  allowedClasses: string[];
-  active: boolean;
 }
 
 export interface VehicleTag {
@@ -44,5 +123,3 @@ export interface KpiData {
   activeZones: number;
   hourlyTrends: { hour: string; events: number; lprCount: number }[];
 }
-
-export type TabId = 'gate' | 'area' | 'settings' | 'assistant';

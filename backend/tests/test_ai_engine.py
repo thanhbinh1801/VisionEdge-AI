@@ -1,24 +1,37 @@
 import os
 import pytest
-from backend.app.services.vision_pipeline import AIVisionPipeline
+from backend.app.services.vision_pipeline import AIVisionPipeline, CANONICAL_8_OBJECT_CLASSES
 from backend.app.services.event_manager import EventManager
 from backend.app.services.video_stream import VideoStreamService
 
-def test_point_in_polygon_raycasting():
+def test_8_canonical_object_classes():
     pipeline = AIVisionPipeline()
-    # Define a rectangular polygon zone (0.1, 0.1) to (0.8, 0.8)
-    polygon = [(0.1, 0.1), (0.8, 0.1), (0.8, 0.8), (0.1, 0.8)]
+    assert len(CANONICAL_8_OBJECT_CLASSES) == 8
+    for cls_name in CANONICAL_8_OBJECT_CLASSES:
+        assert cls_name in pipeline.classes
 
-    # Test point inside polygon
-    assert pipeline.point_in_polygon((0.5, 0.5), polygon) is True
+def test_point_in_polygon_raycasting_formats():
+    pipeline = AIVisionPipeline()
+    
+    # Format 1: Tuple format [(0.1, 0.1), (0.8, 0.1), (0.8, 0.8), (0.1, 0.8)]
+    poly_tuples = [(0.1, 0.1), (0.8, 0.1), (0.8, 0.8), (0.1, 0.8)]
+    assert pipeline.point_in_polygon((0.5, 0.5), poly_tuples) is True
+    assert pipeline.point_in_polygon((0.9, 0.9), poly_tuples) is False
 
-    # Test point outside polygon
-    assert pipeline.point_in_polygon((0.9, 0.9), polygon) is False
-    assert pipeline.point_in_polygon((0.0, 0.0), polygon) is False
+    # Format 2: Dict format [{"x": 10.0, "y": 10.0}, {"x": 80.0, "y": 10.0}, ...] (Percentage 0-100)
+    poly_dicts = [
+        {"x": 10.0, "y": 10.0},
+        {"x": 80.0, "y": 10.0},
+        {"x": 80.0, "y": 80.0},
+        {"x": 10.0, "y": 80.0}
+    ]
+    # Point inside (50.0, 50.0) -> (0.5, 0.5)
+    assert pipeline.point_in_polygon({"x": 50.0, "y": 50.0}, poly_dicts) is True
+    assert pipeline.point_in_polygon({"x": 95.0, "y": 95.0}, poly_dicts) is False
 
 def test_evaluate_bbox_center_in_zone():
     pipeline = AIVisionPipeline()
-    polygon = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)]
+    polygon = [{"x": 0.0, "y": 0.0}, {"x": 1.0, "y": 0.0}, {"x": 1.0, "y": 1.0}, {"x": 0.0, "y": 1.0}]
 
     # BBox: xmin, ymin, xmax, ymax (center = 0.5, 0.5 -> inside)
     bbox_inside = (0.2, 0.2, 0.8, 0.8)
@@ -30,9 +43,10 @@ def test_evaluate_bbox_center_in_zone():
 
 def test_yolo_world_custom_classes():
     pipeline = AIVisionPipeline()
-    new_prompts = ["person", "forklift", "truck", "safety_helmet", "danger_zone"]
+    new_prompts = ["safety_helmet", "danger_zone_flag"]
     pipeline.update_custom_classes(new_prompts)
-    assert pipeline.classes == new_prompts
+    assert "safety_helmet" in pipeline.classes
+    assert "danger_zone_flag" in pipeline.classes
 
 def test_cooldown_15s_cache():
     manager = EventManager(cooldown_seconds=15)
@@ -56,6 +70,6 @@ def test_slice_10s_ring_buffer_clip(tmp_path):
     assert os.path.exists(tmp_path / "clip_BAI-KIEM_123456789.mp4")
 
 def test_video_stream_service_init():
-    stream = VideoStreamService(camera_id="BAI-KIEM", video_path="backend/data/videos/BAI-KIEM.mp4")
+    stream = VideoStreamService(camera_id="BAI-KIEM")
     assert stream.camera_id == "BAI-KIEM"
-    assert stream.video_path == "backend/data/videos/BAI-KIEM.mp4"
+    assert os.path.exists(stream.video_path)

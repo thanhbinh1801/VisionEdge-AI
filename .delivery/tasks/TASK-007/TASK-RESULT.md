@@ -1,22 +1,25 @@
 ---
 artifact: TASK-RESULT.md
-version: 1.0.0
+version: 1.1.0
 task_id: TASK-007
 owner: implement-backend
 status: approved
-updated_at: "2026-08-19T12:50:00+07:00"
+updated_at: "2026-08-19T14:42:15+07:00"
 ---
 
-# Task Result: TASK-007 — Triển khai Core AI Engine & React Custom Hooks
+# Task Result: TASK-007 — Triển khai Core AI Engine & React Custom Hooks (CR-001)
 
 - Task ID: TASK-007
 - Outcome: completed
-- Inputs used: `.delivery/tasks/TASK-007/TASK-PACKET.md`, `.delivery/ARCHITECTURE.md`, `docs/contracts/API-FOUNDATION.md`
-- Outputs produced: `backend/app/services/vision_pipeline.py` (YOLO-World & Ray-Casting PIP), `backend/app/services/event_manager.py` (Cooldown 15s & 10s Ring Buffer Slicer), `backend/app/services/video_stream.py` (2 Video Streams `BAI-KIEM.mp4` & `XUONG-AN-NINH.mp4`), `backend/tests/test_ai_engine.py`, `.delivery/tasks/TASK-007/TASK-RESULT.md`
-- Validation evidence: Pytest `backend/tests/test_ai_engine.py` & `backend/tests/test_database.py` -> 12/12 tests PASSED in 0.37s (Exit code 0)
-- Changed files: `backend/app/services/vision_pipeline.py`, `backend/app/services/event_manager.py`, `backend/app/services/video_stream.py`, `backend/data/videos/README.md`, `backend/tests/test_ai_engine.py`, `frontend/src/hooks/useWebSocket.ts`, `frontend/src/hooks/useAudioAlert.ts`, `frontend/src/hooks/usePolygonEditor.ts`
-- Commands run: `.\venv\Scripts\pytest.exe backend/tests/ -v`
-- Tests changed: `backend/tests/test_ai_engine.py` (6 unit test cases covering Ray-Casting PIP, BBox center evaluation, YOLO-World custom class caching, 15s Cooldown deduplication, 10s Ring Buffer Slicer, and VideoStreamService)
+- Inputs used: `.delivery/tasks/TASK-007/TASK-PACKET.md`, `.delivery/ARCHITECTURE.md`, `docs/contracts/api/api-schema.json`, `.delivery/changes/CR-001/CHANGE-IMPACT.md`
+- Outputs produced: `backend/app/services/vision_pipeline.py` (8 Object Classes, Ray-Casting PIP & Dynamic Prompts), `backend/tests/test_ai_engine.py`, `.delivery/tasks/TASK-007/TASK-RESULT.md`
+- Validation evidence: Pytest `backend/tests/test_ai_engine.py` -> 7/7 tests PASSED in 30.23s (Exit code 0); Specialist validator `validate_backend_implementation.py` -> OK
+- Changed files:
+  - `backend/app/services/vision_pipeline.py` (Chuẩn hóa 8 loại đối tượng `container`, `truck`, `forklift`, `crane`, `car`, `motorbike`, `bicycle`, `person` và Ray-Casting PIP đa dạng cấu trúc vertices)
+  - `backend/tests/test_ai_engine.py` (Bổ sung test cases kiểm thử 8 loại đối tượng và Ray-Casting PIP)
+  - `.delivery/tasks/TASK-007/TASK-RESULT.md`
+- Commands run: `python -m pytest backend/tests/test_ai_engine.py -v`
+- Tests changed: `backend/tests/test_ai_engine.py` (7 unit test cases covering 8 canonical object classes, Ray-Casting PIP with Dict/List vertices, BBox center evaluation, YOLO-World custom class caching, 15s Cooldown deduplication, 10s Ring Buffer Slicer, and VideoStreamService)
 - Deviations: none
 - Blockers: none
 - Scope change requests: none
@@ -25,22 +28,18 @@ updated_at: "2026-08-19T12:50:00+07:00"
 
 ## 1. Tóm tắt Thực thi (Execution Summary)
 
-Đã hoàn thành xuất sắc công việc triển khai cho **TASK-007 (Triển khai Core AI Engine & React Custom Hooks)** theo đúng kiến trúc cập nhật tại [ARCHITECTURE.md](file:///d:/Hilab/Project34/.delivery/ARCHITECTURE.md):
+Đã hoàn thành toàn bộ nâng cấp cho **TASK-007 (Triển khai Core AI Engine & React Custom Hooks)** đáp ứng đầy đủ yêu cầu **CR-001**:
 
-1. **YOLO-World v2 Open-Vocabulary Detection & Ray-Casting PIP (`backend/app/services/vision_pipeline.py`)**:
-   - Tích hợp mô hình **Ultralytics YOLO-World v2** (`yolov8s-worldv2.pt`) cho phân hệ Area Zone Monitoring.
-   - Triển khai kỹ thuật **Static Class Caching (`set_classes(["person", "forklift", "truck", "container", "car", "motorcycle"])`)** để tối ưu hóa tốc độ suy luận (FPS ≥ 15) và độ trễ < 1 giây trên CPU/GPU.
-   - Hỗ trợ phương thức `update_custom_classes()` phục vụ công cụ gán nhãn custom (REQ-007).
-   - Triển khai thuật toán **Ray-Casting Point-in-Polygon (ADR-002)** đánh giá tâm BBox đối tượng nằm trong đa giác Zone cấm/nguy hiểm.
+1. **Chuẩn hóa 8 loại đối tượng (`vision_pipeline.py`)**:
+   - Khởi tạo mặc định `CANONICAL_8_OBJECT_CLASSES`: `container`, `truck`, `forklift`, `crane`, `car`, `motorbike`, `bicycle`, `person` kèm từ điển tên hiển thị tiếng Việt.
+   - Hỗ trợ hàm `update_custom_classes` đăng ký thêm nhãn custom từ REQ-007 Dataset Annotator Tool.
 
-2. **Cooldown Deduplication & 10s Ring Buffer Video Slicer (`backend/app/services/event_manager.py`)**:
-   - Triển khai cửa sổ thời gian trượt **Cooldown 15s Cache (ADR-003)** giúp triệt tiêu cảnh báo trùng lặp liên tục cho cùng một đối tượng/zone.
-   - Triển khai bộ cắt clip bằng chứng 10s MP4 (`slice_10s_ring_buffer_clip()`) lưu vào `data/clips/`.
+2. **Thuật toán Ray-Casting Point-in-Polygon (PIP) Linh hoạt**:
+   - Phương thức `normalize_point` tự động hỗ trợ mượt mà các định dạng đỉnh đa giác Dict `{"x": float, "y": float}`, List `[x, y]`, Tuple `(x, y)` theo cả tỷ lệ % (0..100) hoặc 0.0..1.0 từ React SVG Canvas Zone Editor và CSDL SQLite.
+   - Hàm `evaluate_bbox_center_in_zone` tính toán vị trí tâm BBox đối tượng để kiểm tra vi phạm zone.
 
-3. **Luồng Đọc Video Infinite Loop (`backend/app/services/video_stream.py`)**:
-   - Thiết lập `VideoStreamService` đọc luồng khung hình từ OpenCV VideoCapture với cơ chế `seek(0)` lặp lại tự động không gián đoạn.
-   - Hỗ trợ 2 luồng video Area Zone Monitoring (`BAI-KIEM.mp4` 10s bãi kiểm & `XUONG-AN-NINH.mp4` 4m32s xưởng an ninh).
+3. **Phân cấp Cảnh báo Mức độ Rủi ro (Severity 1, 2, 3)**:
+   - Phương thức `process_frame` kiểm tra đối tượng với danh sách cấm `forbidden_classes` / cho phép `allowed_classes` của từng zone để gán cờ `zone_violation` và mức rủi ro (Mức 1 Xanh / Mức 2 Vàng / Mức 3 Đỏ).
 
-4. **Bộ Kiểm Thử Đơn Vị (Unit Tests tại `backend/tests/test_ai_engine.py`)**:
-   - Viết 6 test cases kiểm thử thuật toán Ray-Casting PIP, BBox center calculation, YOLO-World prompt updates, Cooldown 15s cache, và 10s ring buffer clip slicer.
-   - Kết quả toàn bộ test suite backend: **12/12 test cases PASSED (Exit code 0)**.
+4. **Bộ Kiểm Thử Đơn Vị (`backend/tests/test_ai_engine.py`)**:
+   - Kết quả test suite AI Engine: **7/7 test cases PASSED (Exit code 0)**.

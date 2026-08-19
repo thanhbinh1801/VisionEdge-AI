@@ -1,84 +1,77 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-/* ====================================================================
-   SentriAI Mini - Monitoring Design System CSS Tokens (TASK-004)
-   Optimized for 24/7 Security Camera Monitoring Center (High Contrast)
-   ==================================================================== */
 
 :root {
-  /* Monitoring Dark Color Palette */
-  --bg-monitoring-base: #020617;     /* Slate 950 Base Dark Background */
-  --bg-monitoring-card: #0f172a;     /* Slate 900 Container Background */
-  --bg-monitoring-hover: #1e293b;    /* Slate 800 Interactive Hover */
-  --border-monitoring: #334155;       /* Slate 700 Borders */
+  /* Prototype Theme Tokens from Intern-LPR-Gate.dc.html */
+  --bg: #0f1013;
+  --panel: #16171b;
+  --card: #1c1d22;
+  --raise: #26272d;
+  --line: rgba(255, 255, 255, .09);
+  --line2: rgba(255, 255, 255, .16);
+  --ink: #f3f3f6;
+  --ink2: #a1a1ab;
+  --ink3: #6a6a74;
+  --acc: #2f9bff;
+  --accq: rgba(47, 155, 255, .16);
+  --p0: #ff453a;
+  --p0q: rgba(255, 69, 58, .16);
+  --p1: #ff9f0a;
+  --p1q: rgba(255, 159, 10, .16);
+  --ok: #30d158;
+  --okq: rgba(48, 209, 88, .15);
 
-  /* High-Contrast Severity Badges */
-  --severity-level-1-bg: #064e3b;    /* Emerald 900 - Level 1 Green Clear */
-  --severity-level-1-text: #34d399;  /* Emerald 400 */
-  --severity-level-2-bg: #78350f;    /* Amber 900 - Level 2 Yellow Caution */
-  --severity-level-2-text: #fbbf24;  /* Amber 400 */
-  --severity-level-3-bg: #7f1d1d;    /* Red 900 - Level 3 Red Critical */
-  --severity-level-3-text: #f87171;  /* Red 400 */
+  /* Monitoring Dark Color Palette Legacy */
+  --bg-monitoring-base: #0f1013;
+  --bg-monitoring-card: #16171b;
+  --bg-monitoring-hover: #26272d;
+  --border-monitoring: rgba(255, 255, 255, .09);
 
-  /* Accents & Text */
-  --accent-indigo: #6366f1;          /* Electric Indigo Primary */
-  --accent-sky: #0ea5e9;             /* Sky Blue Secondary */
-  --text-primary: #f8fafc;           /* Slate 50 High Contrast Text */
-  --text-muted: #94a3b8;             /* Slate 400 Muted Text */
+  --accent-indigo: #2f9bff;
+  --accent-sky: #0ea5e9;
+  --text-primary: #f3f3f6;
+  --text-muted: #a1a1ab;
 }
 
-body {
-  background-color: var(--bg-monitoring-base);
-  color: var(--text-primary);
-  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+* {
+  box-sizing: border-box;
+}
+
+html, body {
   margin: 0;
   padding: 0;
+  background-color: var(--bg);
+  color: var(--ink);
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
   overflow-x: hidden;
 }
 
-/* Custom Scrollbar for Monitoring Feeds */
+/* Custom Scrollbar */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 9px;
+  height: 9px;
 }
 ::-webkit-scrollbar-track {
-  background: var(--bg-monitoring-base);
+  background: var(--bg);
 }
 ::-webkit-scrollbar-thumb {
-  background: var(--border-monitoring);
-  border-radius: 3px;
+  background: rgba(140, 140, 150, .32);
+  border-radius: 6px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--accent-indigo);
+  background: var(--acc);
 }
 
-/* Severity Level Utility Classes */
-.badge-severity-1 {
-  background-color: var(--severity-level-1-bg);
-  color: var(--severity-level-1-text);
-  border: 1px solid #10b981;
+@keyframes liveDot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
 }
 
-.badge-severity-2 {
-  background-color: var(--severity-level-2-bg);
-  color: var(--severity-level-2-text);
-  border: 1px solid #f59e0b;
-}
-
-.badge-severity-3 {
-  background-color: var(--severity-level-3-bg);
-  color: var(--severity-level-3-text);
-  border: 1px solid #ef4444;
-  animation: pulse-red 1.5s infinite;
-}
-
-@keyframes pulse-red {
-  0%, 100% {
-    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7);
-  }
-  50% {
-    box-shadow: 0 0 0 10px rgba(239, 68, 68, 0);
-  }
+@keyframes msgIn {
+  from { opacity: 0; transform: translateY(5px); }
+  to { opacity: 1; transform: none; }
 }

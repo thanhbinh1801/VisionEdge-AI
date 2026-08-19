@@ -1,8 +1,8 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "title": "SentriAI Mini WebSocket Event Schemas",
-  "description": "JSON Schema for real-time WebSocket events broadcasted to React Web UI Client Hooks (CR-002)",
-  "version": "1.0.0",
+  "title": "SentriAI Mini WebSocket Event Schemas (CR-001 & CR-002)",
+  "description": "JSON Schema for real-time WebSocket events broadcasted to React Web UI Client Hooks",
+  "version": "1.1.0",
   "type": "object",
   "required": ["event_type", "timestamp", "payload"],
   "properties": {
@@ -12,7 +12,8 @@
         "LPR_DETECTION_EVENT",
         "ZONE_VIOLATION_EVENT",
         "KPI_STATS_UPDATE",
-        "ALERT_LEVEL_3_NOTIFICATION"
+        "ALERT_LEVEL_3_NOTIFICATION",
+        "DATASET_SAMPLE_SYNC_EVENT"
       ]
     },
     "timestamp": {
@@ -24,7 +25,8 @@
         { "$ref": "#/definitions/LprDetectionPayload" },
         { "$ref": "#/definitions/ZoneViolationPayload" },
         { "$ref": "#/definitions/KpiStatsUpdatePayload" },
-        { "$ref": "#/definitions/AlertLevel3Payload" }
+        { "$ref": "#/definitions/AlertLevel3Payload" },
+        { "$ref": "#/definitions/DatasetSampleSyncPayload" }
       ]
     }
   },
@@ -54,15 +56,17 @@
         "zone_name": { "type": "string" },
         "object_class": {
           "type": "string",
-          "enum": ["person", "container_truck", "truck", "forklift", "crane_truck", "car", "motorbike", "bicycle"]
+          "enum": ["container", "truck", "forklift", "crane", "car", "motorbike", "bicycle", "person"]
         },
+        "vehicle_label": { "type": "string", "enum": ["known", "unknown"] },
         "bbox": {
           "type": "array",
           "items": { "type": "number" },
           "minItems": 4,
-          "maxItems": 4
+          "maxItems": 4,
+          "description": "[x_min, y_min, x_max, y_max]"
         },
-        "severity_level": { "type": "integer", "enum": [2, 3] },
+        "severity_level": { "type": "integer", "enum": [1, 2, 3] },
         "crop_image_url": { "type": "string" },
         "video_clip_url": { "type": "string" }
       }
@@ -106,6 +110,19 @@
           "description": "Kích hoạt phát tiếng bíp trên React Shared Component AudioBeepPlayer"
         },
         "telegram_dispatched": { "type": "boolean" }
+      }
+    },
+    "DatasetSampleSyncPayload": {
+      "type": "object",
+      "required": ["sync_id", "timestamp", "new_labels", "synced_zones_count"],
+      "properties": {
+        "sync_id": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "new_labels": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "synced_zones_count": { "type": "integer" }
       }
     }
   }
