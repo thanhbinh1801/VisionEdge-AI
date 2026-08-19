@@ -37,3 +37,10 @@ build/
 .idea/
 .DS_Store
 Thumbs.db
+
+# AI Model Weights & Video files
+*.pt
+weights/
+*.mp4
+
+.delivery/TEAM-PLAN-2PEOPLE-REMAINING-4-DAYS.md

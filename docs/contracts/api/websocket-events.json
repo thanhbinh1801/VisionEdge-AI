@@ -1,0 +1,112 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "SentriAI Mini WebSocket Event Schemas",
+  "description": "JSON Schema for real-time WebSocket events broadcasted to React Web UI Client Hooks (CR-002)",
+  "version": "1.0.0",
+  "type": "object",
+  "required": ["event_type", "timestamp", "payload"],
+  "properties": {
+    "event_type": {
+      "type": "string",
+      "enum": [
+        "LPR_DETECTION_EVENT",
+        "ZONE_VIOLATION_EVENT",
+        "KPI_STATS_UPDATE",
+        "ALERT_LEVEL_3_NOTIFICATION"
+      ]
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "payload": {
+      "oneOf": [
+        { "$ref": "#/definitions/LprDetectionPayload" },
+        { "$ref": "#/definitions/ZoneViolationPayload" },
+        { "$ref": "#/definitions/KpiStatsUpdatePayload" },
+        { "$ref": "#/definitions/AlertLevel3Payload" }
+      ]
+    }
+  },
+  "definitions": {
+    "LprDetectionPayload": {
+      "type": "object",
+      "required": ["event_id", "camera_id", "lane_id", "license_plate", "confidence", "tag_label", "crop_image_url", "video_clip_url"],
+      "properties": {
+        "event_id": { "type": "string" },
+        "camera_id": { "type": "string", "enum": ["GATE-01"] },
+        "lane_id": { "type": "string", "enum": ["IN_1", "IN_2"] },
+        "license_plate": { "type": "string" },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1.0 },
+        "tag_label": { "type": "string", "enum": ["known", "unknown"] },
+        "severity_level": { "type": "integer", "enum": [1, 2] },
+        "crop_image_url": { "type": "string" },
+        "video_clip_url": { "type": "string" }
+      }
+    },
+    "ZoneViolationPayload": {
+      "type": "object",
+      "required": ["event_id", "camera_id", "zone_id", "zone_name", "object_class", "severity_level", "crop_image_url", "video_clip_url"],
+      "properties": {
+        "event_id": { "type": "string" },
+        "camera_id": { "type": "string", "enum": ["BAI-KIEM"] },
+        "zone_id": { "type": "string" },
+        "zone_name": { "type": "string" },
+        "object_class": {
+          "type": "string",
+          "enum": ["person", "container_truck", "truck", "forklift", "crane_truck", "car", "motorbike", "bicycle"]
+        },
+        "bbox": {
+          "type": "array",
+          "items": { "type": "number" },
+          "minItems": 4,
+          "maxItems": 4
+        },
+        "severity_level": { "type": "integer", "enum": [2, 3] },
+        "crop_image_url": { "type": "string" },
+        "video_clip_url": { "type": "string" }
+      }
+    },
+    "KpiStatsUpdatePayload": {
+      "type": "object",
+      "required": [
+        "gate_vehicles_total",
+        "gate_lpr_success",
+        "gate_lpr_failed",
+        "gate_avg_confidence",
+        "area_active_objects",
+        "area_zone_violations",
+        "area_active_machinery",
+        "area_total_zones"
+      ],
+      "properties": {
+        "gate_vehicles_total": { "type": "integer", "minimum": 0 },
+        "gate_lpr_success": { "type": "integer", "minimum": 0 },
+        "gate_lpr_failed": { "type": "integer", "minimum": 0 },
+        "gate_avg_confidence": { "type": "number", "minimum": 0, "maximum": 100.0 },
+        "area_active_objects": { "type": "integer", "minimum": 0 },
+        "area_zone_violations": { "type": "integer", "minimum": 0 },
+        "area_active_machinery": { "type": "integer", "minimum": 0 },
+        "area_total_zones": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "AlertLevel3Payload": {
+      "type": "object",
+      "required": ["alert_id", "timestamp", "camera_id", "zone_name", "violation_reason", "crop_image_url", "audio_trigger"],
+      "properties": {
+        "alert_id": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "camera_id": { "type": "string" },
+        "zone_name": { "type": "string" },
+        "violation_reason": { "type": "string" },
+        "crop_image_url": { "type": "string" },
+        "audio_trigger": {
+          "type": "boolean",
+          "default": true,
+          "description": "Kích hoạt phát tiếng bíp trên React Shared Component AudioBeepPlayer"
+        },
+        "telegram_dispatched": { "type": "boolean" }
+      }
+    }
+  }
+}

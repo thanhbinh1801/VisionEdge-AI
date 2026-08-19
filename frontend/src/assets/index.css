@@ -1,0 +1,84 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ====================================================================
+   SentriAI Mini - Monitoring Design System CSS Tokens (TASK-004)
+   Optimized for 24/7 Security Camera Monitoring Center (High Contrast)
+   ==================================================================== */
+
+:root {
+  /* Monitoring Dark Color Palette */
+  --bg-monitoring-base: #020617;     /* Slate 950 Base Dark Background */
+  --bg-monitoring-card: #0f172a;     /* Slate 900 Container Background */
+  --bg-monitoring-hover: #1e293b;    /* Slate 800 Interactive Hover */
+  --border-monitoring: #334155;       /* Slate 700 Borders */
+
+  /* High-Contrast Severity Badges */
+  --severity-level-1-bg: #064e3b;    /* Emerald 900 - Level 1 Green Clear */
+  --severity-level-1-text: #34d399;  /* Emerald 400 */
+  --severity-level-2-bg: #78350f;    /* Amber 900 - Level 2 Yellow Caution */
+  --severity-level-2-text: #fbbf24;  /* Amber 400 */
+  --severity-level-3-bg: #7f1d1d;    /* Red 900 - Level 3 Red Critical */
+  --severity-level-3-text: #f87171;  /* Red 400 */
+
+  /* Accents & Text */
+  --accent-indigo: #6366f1;          /* Electric Indigo Primary */
+  --accent-sky: #0ea5e9;             /* Sky Blue Secondary */
+  --text-primary: #f8fafc;           /* Slate 50 High Contrast Text */
+  --text-muted: #94a3b8;             /* Slate 400 Muted Text */
+}
+
+body {
+  background-color: var(--bg-monitoring-base);
+  color: var(--text-primary);
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  margin: 0;
+  padding: 0;
+  overflow-x: hidden;
+}
+
+/* Custom Scrollbar for Monitoring Feeds */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: var(--bg-monitoring-base);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-monitoring);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--accent-indigo);
+}
+
+/* Severity Level Utility Classes */
+.badge-severity-1 {
+  background-color: var(--severity-level-1-bg);
+  color: var(--severity-level-1-text);
+  border: 1px solid #10b981;
+}
+
+.badge-severity-2 {
+  background-color: var(--severity-level-2-bg);
+  color: var(--severity-level-2-text);
+  border: 1px solid #f59e0b;
+}
+
+.badge-severity-3 {
+  background-color: var(--severity-level-3-bg);
+  color: var(--severity-level-3-text);
+  border: 1px solid #ef4444;
+  animation: pulse-red 1.5s infinite;
+}
+
+@keyframes pulse-red {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7);
+  }
+  50% {
+    box-shadow: 0 0 0 10px rgba(239, 68, 68, 0);
+  }
+}

@@ -1,16 +1,27 @@
 ---
-artifact: OPEN-QUESTIONS
+artifact: OPEN-QUESTIONS.md
 version: 1.0.0
-owner: Product Owner & Engineering Team
+owner: collect-requirements
 status: approved
-updated_at: 2026-08-17T22:07:32+07:00
+updated_at: "2026-08-19T11:03:43+07:00"
 ---
 
-# Danh sách Câu hỏi Mở (Open Questions) - SentriAI Mini
+# Danh sách Câu hỏi Mở Dự án SentriAI Mini
 
-| Question ID | Loại (Blocking / Non-blocking) | Nội dung Câu hỏi | Khu vực ảnh hưởng | Người phụ trách | Trạng thái Đã giải quyết |
-|---|---|---|---|---|---|
-| **Q-001** | **Blocking** | Cơ chế Khử trùng lặp (Deduplication) & Gom nhóm sự kiện khi một xe/đối tượng xuất hiện liên tục trong Zone được xử lý như thế nào? | Event Pipeline, Storage, LLM Q&A | Product Owner / Mentor | **Resolved**: Gom nhóm theo Cửa sổ thời gian Cooldown 10-15s. |
-| **Q-002** | **Blocking** | Hệ thống Phân loại và Phân cấp mức độ ưu tiên của Cảnh báo (Alert Severity) theo cơ chế nào? | Event Pipeline, UI Dashboard | Product Owner / Mentor | **Resolved**: Phân loại 3 mức độ (Mức 1 Xanh, Mức 2 Vàng, Mức 3 Đỏ). |
-| **Q-003** | **Blocking** | Phương án triển khai tính năng Hỏi đáp AI (LLM Q&A Engine) như thế nào? | AI Assistant Agent | Dev Team | **Resolved**: Tích hợp LLM thực tế (Text-to-SQL / Structured Query) + Fallback Rule-based. |
-| **Q-004** | Non-blocking | Định dạng video lưu clip 10s nên dùng codec nào để xem trực tiếp mượt trên trình duyệt web? | Video Processing, UI Web Player | Dev A (AI Pipeline) | Open (Khuyên dùng MP4 H.264 / AAC). |
+## QUESTION-001 Lựa chọn mô hình OCR mặc định cho biển số xe
+
+- Type: non-blocking
+- Affected areas: ai-vision-pipeline
+- Owner: collect-requirements
+- Resolution status: resolved
+
+Tối ưu mô hình OCR kết hợp với YOLOv26 cho biển số xe Việt Nam.
+
+## QUESTION-002 Định dạng phát âm thanh cảnh báo còi bíp trên trình duyệt
+
+- Type: non-blocking
+- Affected areas: web-ui
+- Owner: collect-requirements
+- Resolution status: resolved
+
+Sử dụng React Web Audio API Synthesizer trong `<AudioBeepPlayer>` component.
