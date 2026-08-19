@@ -1,24 +1,27 @@
 ---
 artifact: API-FOUNDATION.md
-version: 1.0.0
+version: 1.1.0
 owner: design-api
 task_id: TASK-002
 capability: api-foundation-design
 status: approved
-updated_at: "2026-08-19T11:23:31+07:00"
+updated_at: "2026-08-19T14:32:30+07:00"
 linked_requirements:
   - REQ-001
   - REQ-002
   - REQ-003
   - REQ-005
+  - REQ-006
+  - REQ-007
   - REQ-008
   - REQ-009
+  - CR-001
   - CR-002
 ---
 
-# Global REST API Foundation Contract — SentriAI Mini
+# Global REST API Foundation Contract — SentriAI Mini (CR-001 & CR-002)
 
-Tài liệu quy định chuẩn hợp đồng REST API Foundation toàn cục và giao thức WebSocket real-time cho hệ thống Giám sát Camera AI (SentriAI Mini - CR-002 React & YOLOv26).
+Tài liệu quy định chuẩn hợp đồng REST API Foundation toàn cục và giao thức WebSocket real-time cho hệ thống Giám sát Camera AI (SentriAI Mini - CR-001 Polygon Zone & CR-002 React & YOLOv26 Modernization).
 
 ---
 
@@ -29,11 +32,14 @@ Ma trận vết các yêu cầu sản phẩm và kiến trúc kỹ thuật liên
 | Requirement ID | Tiêu đề Yêu cầu | Mô tả Phủ trên Hợp đồng API Foundation | Endpoints / WS Event Liên quan |
 |---|---|---|---|
 | **REQ-001** | Nhận diện biển số Cổng (LPR) | Cung cấp thông số camera GATE-01, stream LPR realtime, dữ liệu 4 thẻ KPI Recharts, video MP4 10s và ảnh crop biển số. | `GET /api/v1/cameras/GATE-01`, `GET /api/v1/events`, `WS: LPR_DETECTION_EVENT` |
-| **REQ-002** | Giám sát Khu vực & Quy tắc Zone | Quản lý thông số camera BAI-KIEM, phát hiện 8 loại đối tượng bằng YOLOv26, kiểm tra Point-in-polygon và KPI bãi kiểm. | `GET /api/v1/cameras/BAI-KIEM`, `GET /api/v1/zones`, `WS: ZONE_VIOLATION_EVENT` |
+| **REQ-002** | Giám sát Khu vực & Phân loại 8 Loại Đối tượng (CR-001) | Quản lý camera BAI-KIEM, phát hiện 8 nhóm đối tượng (Container, Xe tải, Xe nâng, Xe cẩu, Xe con, Xe máy, Xe đạp, Người) bằng YOLOv26, kiểm tra Point-in-polygon và KPI bãi kiểm. | `GET /api/v1/cameras/BAI-KIEM`, `GET /api/v1/zones`, `WS: ZONE_VIOLATION_EVENT` |
 | **REQ-003** | Phân cấp Mức độ Cảnh báo | Phân loại 3 cấp độ: Mức 1 (Xanh - Xe quen/Được phép), Mức 2 (Vàng - Xe lạ), Mức 3 (Đỏ - Vi phạm zone cấm). | `GET /api/v1/events?severity_level={1|2|3}`, WebSocket Badge payloads |
-| **REQ-005** | Cấu hình Zone Đa giác | Hỗ trợ CRUD đa giác polygon SVG Canvas, bật/tắt quyền theo loại xe/đối tượng qua React UI `<PolygonZoneEditor>`. | `GET /api/v1/zones`, `POST /api/v1/zones`, `PUT /api/v1/zones/{id}`, `DELETE /api/v1/zones/{id}` |
+| **REQ-005** | Cấu hình Zone Đa giác 4 thao tác (CR-001) | Hỗ trợ CRUD đa giác polygon SVG Canvas (thêm góc, kéo đỉnh, kéo điểm giữa cạnh, kéo thân), bật/tắt quyền theo 8 loại xe/đối tượng qua React UI `<PolygonZoneEditor>`. | `GET /api/v1/zones`, `POST /api/v1/zones`, `PUT /api/v1/zones/{id}`, `DELETE /api/v1/zones/{id}` |
+| **REQ-006** | Quản lý Biển số Xe quen / Xe lạ (CR-001) | Tra cứu và 1-click gán nhãn Xe quen (`known` - đã xác thực) / Xe lạ (`unknown` - chưa ghi nhận) qua React Data Table `<VehicleTagTable>`. | `GET /api/v1/vehicles`, `PUT /api/v1/vehicles/{plate_number}/tag`, `GET /api/v1/vehicles/stats` |
+| **REQ-007** | Tool Gắn nhãn Mẫu BBox Custom & Sync Zone (CR-001) | Quản lý import frame/ảnh, khoanh BBox tương tác (`<DatasetAnnotator>`), lưu batch mẫu đã gắn, và tự động đồng bộ nhãn mới sang tất cả các zone. | `GET /api/v1/dataset/sources`, `GET /api/v1/dataset/samples`, `POST /api/v1/dataset/samples`, `DELETE /api/v1/dataset/samples/{id}`, `POST /api/v1/dataset/sync-zones`, `WS: DATASET_SAMPLE_SYNC_EVENT` |
 | **REQ-008** | AI Assistant Hỏi đáp Sự kiện | REST endpoint cho Chatbot tiếng Việt (Text-to-SQL query), trả về kết quả số liệu kèm đính kèm trình phát `<VideoModal>` clip 10s. | `POST /api/v1/chatbot/query` |
 | **REQ-009** | Cảnh báo Tức thì Đa kênh | Đẩy sự kiện Mức 3 qua WebSocket tới React UI (phát `<AudioBeepPlayer>`) và thông báo Telegram Bot đính kèm ảnh crop. | `WS: ALERT_LEVEL_3_NOTIFICATION` |
+| **CR-001** | Quy tắc Zone & BBox Dataset Samples | Phân định 8 loại đối tượng, nhãn Xe quen / Xe lạ, đa giác SVG Canvas 4 thao tác, và tự động đồng bộ nhãn custom. | REST APIs `/zones`, `/vehicles`, `/dataset/*` & WebSocket events |
 | **CR-002** | React SPA & YOLOv26 Modernization | Đảm bảo kiểu dữ liệu TypeScript & JSON Schema tương thích 100% với Vite + React SPA Client Hooks và FastAPI Backend. | Toàn bộ REST APIs & WebSocket payloads |
 
 ---
@@ -44,18 +50,29 @@ Ma trận vết các yêu cầu sản phẩm và kiến trúc kỹ thuật liên
 Tất cả các tài nguyên REST API tuân theo cấu trúc URL chuẩn mực:
 - **Base REST Path**: `/api/v1`
 - **Base WebSocket Path**: `/ws/v1/events`
-- **Format**: `kebab-case` cho URL paths (ví dụ: `/api/v1/chatbot/query`, `/api/v1/kpi/stats`).
-- **Resource Plurality**: Danh từ số nhiều cho REST Resources (`/cameras`, `/zones`, `/vehicles`, `/events`, `/labels`).
+- **Format**: `kebab-case` cho URL paths (ví dụ: `/api/v1/chatbot/query`, `/api/v1/dataset/sync-zones`).
+- **Resource Plurality**: Danh từ số nhiều cho REST Resources (`/cameras`, `/zones`, `/vehicles`, `/events`, `/dataset/samples`).
 
 ### 2. Standard HTTP Methods
 - `GET`: Truy vấn tài nguyên (Idempotent & Safe).
-- `POST`: Tạo mới tài nguyên hoặc thực thi tác vụ tính toán (Non-idempotent).
+- `POST`: Tạo mới tài nguyên hoặc thực thi tác vụ tính toán / batch action (Non-idempotent).
 - `PUT`: Cập nhật toàn bộ tài nguyên (Idempotent).
 - `PATCH`: Cập nhật một phần tài nguyên.
 - `DELETE`: Xóa tài nguyên (Idempotent).
 
-### 3. Payload Property Naming
-Dữ liệu JSON trong Body và Parameters sử dụng quy chuẩn `snake_case` ở phía Backend Python/FastAPI, và được map tương ứng sang `camelCase` hoặc giữ nguyên `snake_case` trong TypeScript Type Interfaces chuẩn.
+### 3. Chuẩn hóa Enum Phân loại 8 Đối tượng & Nhãn Phương tiện (CR-001)
+- **8 Object Types**:
+  - `container`: Xe container
+  - `truck`: Xe tải
+  - `forklift`: Xe nâng
+  - `crane`: Xe cẩu
+  - `car`: Xe con
+  - `motorbike`: Xe máy
+  - `bicycle`: Xe đạp
+  - `person`: Người
+- **Vehicle Tag Labels**:
+  - `known`: Xe quen (Đã xác thực / Được phép)
+  - `unknown`: Xe lạ (Chưa ghi nhận / Cần rà soát)
 
 ---
 
@@ -69,8 +86,8 @@ Dữ liệu JSON trong Body và Parameters sử dụng quy chuẩn `snake_case` 
 
 | Role | Mô tả | Quyền hạn REST / WS |
 |---|---|---|
-| `Viewer` | Nhân viên an ninh / Bảo vệ | Read-only trên `/cameras`, `/events`, `/kpi/stats`, `/chatbot/query`, và nhận tin nhắn WebSocket real-time. |
-| `Admin` | Quản trị viên hệ thống | Toàn quyền CRUD trên `/zones`, `/vehicles` (Whitelist/Blacklist), `/labels` (Dataset custom), và cấu hình hệ thống. |
+| `Viewer` | Nhân viên an ninh / Bảo vệ | Read-only trên `/cameras`, `/events`, `/kpi/stats`, `/chatbot/query`, `/vehicles`, và nhận tin nhắn WebSocket real-time. |
+| `Admin` | Quản trị viên hệ thống | Toàn quyền CRUD trên `/zones`, `/vehicles/{plate}/tag`, `/dataset/*` (Annotator samples & Sync), và cấu hình hệ thống. |
 
 ---
 
@@ -85,47 +102,55 @@ Tất cả câu trả lời từ REST API (thành công hoặc thất bại) B�
   "data": { ... },
   "error": null,
   "meta": {
-    "timestamp": "2026-08-19T11:17:50+07:00",
+    "timestamp": "2026-08-19T14:32:30+07:00",
     "request_id": "req-9842a8b3-1e9a-4c2d"
   }
 }
 ```
 
-### 2. Paginated Response Envelope
-Đối với các API danh sách (`/events`, `/vehicles`), trường `meta` tự động bổ sung thông tin phân trang:
+### 2. Standard TypeScript Definitions for Contracts
 
-```json
-{
-  "success": true,
-  "data": [ ... ],
-  "error": null,
-  "meta": {
-    "timestamp": "2026-08-19T11:17:50+07:00",
-    "request_id": "req-9842a8b3-1e9a-4c2d",
-    "page": 1,
-    "limit": 20,
-    "total_items": 142,
-    "total_pages": 8
-  }
-}
-```
-
-### 3. TypeScript Type Definition for Client Apps
 ```typescript
-export interface ApiResponseEnvelope<T> {
-  success: boolean;
-  data: T | null;
-  error: ApiErrorPayload | null;
-  meta: ApiMetaPayload;
+export type ObjectType = 
+  | 'container'
+  | 'truck'
+  | 'forklift'
+  | 'crane'
+  | 'car'
+  | 'motorbike'
+  | 'bicycle'
+  | 'person';
+
+export type VehicleTagLabel = 'known' | 'unknown';
+
+export interface Point2D {
+  x: number; // Percentage 0.0 - 100.0
+  y: number; // Percentage 0.0 - 100.0
 }
 
-export interface ApiMetaPayload {
-  timestamp: string;
-  request_id: string;
-  page?: number;
-  limit?: number;
-  total_items?: number;
-  total_pages?: number;
+export interface ZoneConfig {
+  id: string;
+  camera_id: 'BAI-KIEM' | 'GATE-01';
+  name: string;
+  vertices: Point2D[];
+  allowed_object_types: ObjectType[];
+  prohibited_object_types: ObjectType[];
+  is_active: boolean;
+  color?: string;
+}
+
+export interface BBoxSample {
+  id: string;
+  label_id: string;
+  source_id: string;
+  frame_index?: number;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  category: 'person' | 'vehicle_shape';
+  label_name: string;
+  created_at: string;
 }
 ```
 
@@ -142,7 +167,7 @@ Khi trường `success` là `false`, đối tượng `error` sẽ chứa thông 
   "data": null,
   "error": {
     "code": "INVALID_ZONE_POLYGON",
-    "message": "Zone polygon đa giác phải có ít nhất 3 đỉnh hợp lệ.",
+    "message": "Zone đa giác SVG phải có ít nhất 3 đỉnh hợp lệ.",
     "details": [
       {
         "field": "vertices",
@@ -151,7 +176,7 @@ Khi trường `success` là `false`, đối tượng `error` sẽ chứa thông 
     ]
   },
   "meta": {
-    "timestamp": "2026-08-19T11:17:50+07:00",
+    "timestamp": "2026-08-19T14:32:30+07:00",
     "request_id": "req-err-77123"
   }
 }
@@ -164,7 +189,7 @@ Khi trường `success` là `false`, đối tượng `error` sẽ chứa thông 
 | `BAD_REQUEST` | 400 | Tham số đầu vào không đúng định dạng. |
 | `UNAUTHORIZED` | 401 | Thiếu hoặc Token không hợp lệ. |
 | `FORBIDDEN` | 403 | Tài khoản không có quyền thực thi thao tác Admin. |
-| `NOT_FOUND` | 404 | Tài nguyên (Camera, Zone, Event) không tồn tại. |
+| `NOT_FOUND` | 404 | Tài nguyên (Camera, Zone, Event, BBox Sample) không tồn tại. |
 | `INVALID_ZONE_POLYGON` | 422 | Đa giác polygon vẽ trên SVG Canvas bị lỗi hình học (cắt nhau hoặc < 3 đỉnh). |
 | `COOLDOWN_ACTIVE` | 429 | Sự kiện nằm trong cửa sổ Cooldown 15s bị bỏ qua. |
 | `INTERNAL_SERVER_ERROR` | 500 | Lỗi hệ thống nội bộ từ FastAPI Server. |
@@ -184,6 +209,8 @@ Mọi REST Endpoint trả về danh sách hỗ trợ các query parameters sau:
 | `sort_by` | string | `timestamp` | Trường dùng để sắp xếp (`timestamp`, `severity_level`, `created_at`). |
 | `order` | string | `desc` | Thứ tự sắp xếp (`asc` hoặc `desc`). |
 | `camera_id` | string | null | Lọc theo mã camera (`GATE-01`, `BAI-KIEM`). |
+| `tag_label` | string | null | Lọc nhãn xe (`known` hoặc `unknown`). |
+| `object_class` | string | null | Lọc theo 8 loại đối tượng (`container`, `forklift`, ...). |
 | `severity_level`| integer | null | Lọc theo mức độ rủi ro (1: Green, 2: Yellow, 3: Red). |
 | `start_time` | string | null | Mốc thời gian bắt đầu (ISO-8601). |
 | `end_time` | string | null | Mốc thời gian kết thúc (ISO-8601). |
@@ -215,7 +242,7 @@ Các yêu cầu ghi dữ liệu nhạy cảm hoặc tạo lệnh mới hỗ tr�
 ## Extension Rules
 
 ### 1. Custom Metadata Extension
-Mọi tài nguyên (`Zone`, `Event`, `VehicleTag`) đều có trường `custom_attributes: Record<string, any>` dạng JSON key-value linh hoạt để mở rộng thuộc tính nghiệp vụ mà không cần thay đổi CSDL schema.
+Mọi tài nguyên (`Zone`, `Event`, `VehicleTag`, `BBoxSample`) đều có trường `custom_attributes: Record<string, any>` dạng JSON key-value linh hoạt để mở rộng thuộc tính nghiệp vụ mà không cần thay đổi CSDL schema.
 
 ### 2. Decoupled AI Pipeline Events
 Cấu trúc Payload WebSocket được thiết kế dạng Pub/Sub Event Bus độc lập, cho phép bóc tách `ai-vision-pipeline` hoặc `alert-dispatcher` thành các Microservices độc lập trong tương lai.
@@ -224,4 +251,4 @@ Cấu trúc Payload WebSocket được thiết kế dạng Pub/Sub Event Bus đ�
 
 ## Open Questions
 
-Hiện tại không còn câu hỏi mở nào. Tất cả các yêu cầu về REST Envelope, Error Codes, WebSocket real-time payloads và phân quyền RBAC đã được định nghĩa hoàn chỉnh và sẵn sàng triển khai.
+Hiện tại không còn câu hỏi mở nào. Tất cả các quy tắc nghiệp vụ về 8 loại đối tượng, nhãn Xe quen / Xe lạ, Polygon Zone 4 thao tác, BBox Dataset Annotator Samples và WebSocket real-time payloads đã được định nghĩa hoàn chỉnh và sẵn sàng triển khai.

@@ -1,68 +1,45 @@
 import React from 'react';
-import { Camera, ShieldAlert, Settings, Bot } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { TabId } from '../../types';
 
 export const Sidebar: React.FC = () => {
-  const { activeTab, setActiveTab } = useApp();
+  const { tab, setTab } = useApp();
 
-  const navItems: { id: TabId; label: string; icon: React.ReactNode; tabIndex: number }[] = [
-    { id: 'gate', label: 'Cổng Vào LPR (Tab 1)', icon: <Camera className="w-5 h-5" />, tabIndex: 1 },
-    { id: 'area', label: 'Giám Sát Khu Vực (Tab 2)', icon: <ShieldAlert className="w-5 h-5" />, tabIndex: 2 },
-    { id: 'settings', label: 'Zone & Nhãn Xe (Tab 3)', icon: <Settings className="w-5 h-5" />, tabIndex: 3 },
-    { id: 'assistant', label: 'Hỏi Đáp AI (Tab 4)', icon: <Bot className="w-5 h-5" />, tabIndex: 4 },
+  const menuItems: { id: TabId; label: string }[] = [
+    { id: 'mon', label: 'Giám sát cổng' },
+    { id: 'area', label: 'Giám sát khu vực' },
+    { id: 'set', label: 'Cài đặt' },
+    { id: 'qa', label: 'Hỏi đáp AI' },
   ];
 
   return (
-    <aside
-      role="navigation"
-      aria-label="Sidebar Navigation"
-      className="w-64 bg-[#0f172a] border-r border-slate-800 p-4 flex flex-col justify-between shrink-0 select-none"
-    >
-      <div className="space-y-2">
-        <div className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-slate-400">
-          Phân Hệ Chức Năng
-        </div>
-
-        {navItems.map((item) => {
-          const isActive = activeTab === item.id;
+    <aside style={{ width: '220px', background: 'var(--panel)', borderRight: '1px solid var(--line)', padding: '16px' }}>
+      <div style={{ fontSize: '14px', fontWeight: 700, marginBottom: '16px', color: 'var(--ink)' }}>SentriAI Mini</div>
+      <nav style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+        {menuItems.map((item) => {
+          const isActive = tab === item.id;
           return (
             <button
               key={item.id}
-              type="button"
-              onClick={() => setActiveTab(item.id)}
-              aria-current={isActive ? 'page' : undefined}
-              aria-label={`Chuyển đến màn hình ${item.label}`}
-              className={`w-full flex items-center space-x-3 px-4 py-3 rounded-lg text-sm font-medium transition focus:outline-none focus:ring-2 focus:ring-indigo-500 ${
-                isActive
-                  ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-600/20'
-                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
-              }`}
+              onClick={() => setTab(item.id)}
+              style={{
+                textAlign: 'left',
+                padding: '9px 12px',
+                borderRadius: '8px',
+                border: 'none',
+                background: isActive ? 'var(--acc)' : 'transparent',
+                color: isActive ? '#fff' : 'var(--ink2)',
+                fontWeight: 600,
+                fontSize: '12.5px',
+                cursor: 'pointer',
+                fontFamily: 'inherit',
+              }}
             >
-              {item.icon}
-              <span>{item.label}</span>
+              {item.label}
             </button>
           );
         })}
-      </div>
-
-      <div className="p-4 bg-slate-900 border border-slate-800 rounded-lg text-xs space-y-1.5">
-        <div className="text-slate-300 font-semibold border-b border-slate-800 pb-1">
-          Trạng Thái AI Engine
-        </div>
-        <div className="flex items-center justify-between text-slate-400">
-          <span>YOLO-World v2</span>
-          <span className="text-emerald-400 font-medium">Online</span>
-        </div>
-        <div className="flex items-center justify-between text-slate-400">
-          <span>YOLOv8 + EasyOCR</span>
-          <span className="text-emerald-400 font-medium">Active</span>
-        </div>
-        <div className="flex items-center justify-between text-slate-400">
-          <span>SQLite WAL DB</span>
-          <span className="text-emerald-400 font-medium">OK</span>
-        </div>
-      </div>
+      </nav>
     </aside>
   );
 };

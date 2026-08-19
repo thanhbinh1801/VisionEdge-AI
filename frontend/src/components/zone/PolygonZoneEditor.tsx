@@ -1,89 +1,66 @@
-import React, { useRef } from 'react';
-import { usePolygonEditor } from '../../hooks/usePolygonEditor';
-import { Trash2, PlusCircle } from 'lucide-react';
+import React from 'react';
+import { useApp } from '../../context/AppContext';
 
-interface PolygonZoneEditorProps {
-  onSaveZone?: (points: [number, number][]) => void;
-}
-
-export const PolygonZoneEditor: React.FC<PolygonZoneEditorProps> = ({ onSaveZone }) => {
-  const canvasRef = useRef<SVGSVGElement | null>(null);
-  const { points, addPoint, clearPoints } = usePolygonEditor([
-    [0.1, 0.1],
-    [0.9, 0.1],
-    [0.8, 0.8],
-    [0.2, 0.8],
-  ]);
-
-  const handleCanvasClick = (e: React.MouseEvent<SVGSVGElement>) => {
-    if (!canvasRef.current) return;
-    const rect = canvasRef.current.getBoundingClientRect();
-    const relX = Number(((e.clientX - rect.left) / rect.width).toFixed(3));
-    const relY = Number(((e.clientY - rect.top) / rect.height).toFixed(3));
-    addPoint(relX, relY);
-  };
-
-  const pointsSvgString = points.map(([x, y]) => `${x * 100}%,${y * 100}%`).join(' ');
+export const PolygonZoneEditor: React.FC = () => {
+  const { zonesByCam, toggleZoneType, objLabels } = useApp();
+  const zones = zonesByCam['BAI-KIEM'] || [];
 
   return (
-    <div className="bg-[#0f172a] border border-slate-800 rounded-xl p-4 space-y-3">
-      <div className="flex items-center justify-between">
-        <h3 className="text-sm font-semibold text-slate-200">
-          Vẽ Vùng Cảnh Báo SVG (Zone Canvas)
-        </h3>
-        <div className="flex items-center space-x-2">
-          <button
-            onClick={clearPoints}
-            className="flex items-center space-x-1 px-3 py-1 text-xs bg-slate-800 text-slate-300 rounded border border-slate-700 hover:bg-slate-700"
-          >
-            <Trash2 className="w-3.5 h-3.5" />
-            <span>Xóa Đỉnh</span>
-          </button>
-          <button
-            onClick={() => onSaveZone && onSaveZone(points)}
-            className="flex items-center space-x-1 px-3 py-1 text-xs bg-indigo-600 text-white rounded font-medium hover:bg-indigo-500"
-          >
-            <PlusCircle className="w-3.5 h-3.5" />
-            <span>Lưu Zone</span>
-          </button>
-        </div>
+    <div
+      style={{
+        background: 'var(--card)',
+        border: '1px solid var(--line)',
+        borderRadius: '13px',
+        padding: '16px',
+      }}
+    >
+      <div style={{ fontSize: '13.5px', fontWeight: 600, marginBottom: '12px' }}>
+        Danh Sách Zone Đa Giác (Bãi Kiểm)
       </div>
 
-      <div className="relative aspect-video bg-slate-950 border border-slate-800 rounded-lg overflow-hidden cursor-crosshair">
-        {/* Mock background frame */}
-        <div className="absolute inset-0 flex items-center justify-center text-slate-700 text-xs font-mono">
-          [Camera Live Stream Preview - Click to add Polygon points]
-        </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+        {zones.map((z) => (
+          <div
+            key={z.id}
+            style={{
+              background: 'var(--panel)',
+              border: `1px solid ${z.color}`,
+              borderRadius: '10px',
+              padding: '12px',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
+              <span style={{ width: '10px', height: '10px', borderRadius: '3px', background: z.color }} />
+              <span style={{ fontSize: '13px', fontWeight: 600 }}>{z.name}</span>
+            </div>
 
-        <svg
-          ref={canvasRef}
-          onClick={handleCanvasClick}
-          className="absolute inset-0 w-full h-full"
-        >
-          {points.length > 0 && (
-            <polygon
-              points={pointsSvgString}
-              fill="rgba(99, 102, 241, 0.25)"
-              stroke="#6366f1"
-              strokeWidth="2"
-            />
-          )}
-          {points.map(([x, y], idx) => (
-            <circle
-              key={idx}
-              cx={`${x * 100}%`}
-              cy={`${y * 100}%`}
-              r="6"
-              fill="#ef4444"
-              stroke="#ffffff"
-              strokeWidth="2"
-            />
-          ))}
-        </svg>
-      </div>
-
-      <div className="text-[11px] text-slate-400">
-        Tọa độ relative (%): {JSON.stringify(points)}
+            <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+              {objLabels.map((o) => {
+                const isAllowed = !!z.types[o.name];
+                return (
+                  <button
+                    key={o.id}
+                    onClick={() => toggleZoneType('BAI-KIEM', z.id, o.name)}
+                    style={{
+                      fontSize: '11px',
+                      fontWeight: 600,
+                      padding: '4px 11px',
+                      borderRadius: '20px',
+                      border: `1px solid ${isAllowed ? 'var(--ok)' : 'rgba(255,69,58,.4)'}`,
+                      background: isAllowed ? 'var(--okq)' : 'var(--p0q)',
+                      color: isAllowed ? 'var(--ok)' : 'var(--p0)',
+                      cursor: 'pointer',
+                      fontFamily: 'inherit',
+                    }}
+                  >
+                    {isAllowed ? '✓ ' : '✕ '}
+                    {o.name}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ))}
       </div>
     </div>
   );

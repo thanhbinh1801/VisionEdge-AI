@@ -1,6 +1,6 @@
 -- ====================================================================
 -- SentriAI Mini - Database Schema DDL (SQLite3)
--- Artifact: schema.sql (TASK-003)
+-- Artifact: schema.sql (TASK-003 & TASK-006)
 -- Target: SQLite 3.35+ with Foreign Keys & WAL Mode
 -- ====================================================================
 
@@ -29,7 +29,7 @@ CREATE TABLE IF NOT EXISTS cameras (
 );
 
 -- --------------------------------------------------------------------
--- 2. Polygon Zones Table (REQ-002, REQ-005)
+-- 2. Polygon Zones Table (REQ-002, REQ-005, CR-001)
 -- --------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS zones (
     id VARCHAR(64) PRIMARY KEY,
@@ -45,7 +45,7 @@ CREATE TABLE IF NOT EXISTS zones (
 );
 
 -- --------------------------------------------------------------------
--- 3. Vehicle Whitelist & Blacklist Table (REQ-006)
+-- 3. Vehicle Whitelist & Blacklist Table (REQ-006, CR-001)
 -- --------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS vehicles (
     id VARCHAR(64) PRIMARY KEY,
@@ -80,7 +80,7 @@ CREATE TABLE IF NOT EXISTS events (
 );
 
 -- --------------------------------------------------------------------
--- 5. Custom Label Dataset Annotations Table (REQ-007)
+-- 5. Custom Label Dataset Annotations Table (REQ-007, CR-001)
 -- --------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS custom_labels (
     id VARCHAR(64) PRIMARY KEY,
@@ -89,6 +89,37 @@ CREATE TABLE IF NOT EXISTS custom_labels (
     sample_count INTEGER NOT NULL DEFAULT 0 CHECK (sample_count >= 0),
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- --------------------------------------------------------------------
+-- 5b. Dataset Sources Table (REQ-007, CR-001)
+-- --------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS dataset_sources (
+    id VARCHAR(64) PRIMARY KEY,
+    name VARCHAR(128) NOT NULL,
+    kind VARCHAR(16) NOT NULL CHECK (kind IN ('img', 'video')),
+    url VARCHAR(512) NOT NULL,
+    duration_seconds FLOAT,
+    total_frames INTEGER,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- --------------------------------------------------------------------
+-- 5c. Bounding Box Dataset Samples Table (REQ-007, CR-001)
+-- --------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS bbox_samples (
+    id VARCHAR(64) PRIMARY KEY,
+    label_id VARCHAR(64) NOT NULL,
+    source_id VARCHAR(64) NOT NULL,
+    frame_index INTEGER,
+    x FLOAT NOT NULL,
+    y FLOAT NOT NULL,
+    w FLOAT NOT NULL,
+    h FLOAT NOT NULL,
+    category VARCHAR(32) NOT NULL CHECK (category IN ('person', 'vehicle_shape')),
+    label_name VARCHAR(128) NOT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (source_id) REFERENCES dataset_sources(id) ON DELETE CASCADE
 );
 
 -- --------------------------------------------------------------------
@@ -115,17 +146,36 @@ CREATE INDEX IF NOT EXISTS idx_events_camera_severity ON events(camera_id, sever
 CREATE INDEX IF NOT EXISTS idx_events_license_plate ON events(license_plate);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_vehicles_license_plate ON vehicles(license_plate);
 CREATE INDEX IF NOT EXISTS idx_zones_camera_id ON zones(camera_id);
+CREATE INDEX IF NOT EXISTS idx_bbox_samples_label ON bbox_samples(label_id);
+CREATE INDEX IF NOT EXISTS idx_bbox_samples_source ON bbox_samples(source_id);
 
 -- --------------------------------------------------------------------
 -- Initial Seed Data
 -- --------------------------------------------------------------------
 INSERT OR IGNORE INTO schema_migrations (version, description)
-VALUES ('1.0.0', 'Initial database schema foundation for SentriAI Mini (CR-002)');
+VALUES ('1.1.0', 'Updated database schema with dataset_sources and bbox_samples for CR-001');
 
 INSERT OR IGNORE INTO cameras (id, name, location, stream_url, fps)
 VALUES 
     ('GATE-01', 'Camera Cổng Ván LPR', 'Cổng Chính IN', '/videos/GATE-01.mp4', 15.0),
-    ('BAI-KIEM', 'Camera Bãi Kiểm An Ninh', 'Khu Vực Bãi Kiểm', '/videos/BAI-KIEM.mp4', 10.0);
+    ('BAI-KIEM', 'Camera Bãi Kiểm An Ninh', 'Khu Vực Bãi Kiểm', '/videos/BAI_KIEM.mp4', 10.0);
 
 INSERT OR IGNORE INTO kpi_realtime_cache (id, gate_vehicles_total, gate_lpr_success, gate_lpr_failed, gate_avg_confidence, area_active_objects, area_zone_violations, area_active_machinery, area_total_zones)
 VALUES ('GLOBAL_KPI', 128, 120, 8, 94.5, 14, 3, 5, 2);
+
+INSERT OR IGNORE INTO zones (id, camera_id, name, vertices, allowed_classes, forbidden_classes, color)
+VALUES
+    ('zA', 'GATE-01', 'Làn IN 1', '[{"x":36,"y":54},{"x":50,"y":54},{"x":42,"y":95},{"x":10,"y":95}]', '["container","truck"]', '["car","motorbike","bicycle","person"]', '#30d158'),
+    ('zB', 'GATE-01', 'Làn IN 2', '[{"x":52,"y":54},{"x":66,"y":54},{"x":95,"y":95},{"x":47,"y":95}]', '["container","truck"]', '["car","motorbike","bicycle","person"]', '#2f9bff'),
+    ('zK1', 'BAI-KIEM', 'Zone bãi kiểm', '[{"x":54,"y":52},{"x":88,"y":58},{"x":92,"y":90},{"x":48,"y":92}]', '["container","forklift","truck","crane"]', '["car","motorbike","bicycle","person"]', '#30d158'),
+    ('zK2', 'BAI-KIEM', 'Zone làn di chuyển', '[{"x":38,"y":42},{"x":52,"y":42},{"x":46,"y":94},{"x":8,"y":94}]', '["container","forklift","truck"]', '["car","motorbike","bicycle","person"]', '#ff9f0a'),
+    ('zK3', 'BAI-KIEM', 'Zone cấm PT cá nhân', '[{"x":6,"y":30},{"x":34,"y":28},{"x":36,"y":60},{"x":4,"y":66}]', '["container"]', '["car","motorbike","bicycle","person"]', '#ff453a');
+
+INSERT OR IGNORE INTO events (id, timestamp, camera_id, zone_id, event_type, severity_level, license_plate, object_class, confidence, crop_image_url, video_clip_url)
+VALUES
+    ('evt-bk-01', datetime('now', '-5 minutes'), 'BAI-KIEM', 'zK3', 'ZONE_VIOLATION', 3, NULL, 'Xe máy', 0.96, '/media/crops/crop_01.jpg', '/videos/BAI_KIEM.mp4'),
+    ('evt-bk-02', datetime('now', '-20 minutes'), 'BAI-KIEM', 'zK1', 'ZONE_VIOLATION', 1, 'FL-02', 'Xe nâng FL-02', 0.98, '/media/crops/crop_02.jpg', '/videos/BAI_KIEM.mp4'),
+    ('evt-bk-03', datetime('now', '-45 minutes'), 'BAI-KIEM', 'zK1', 'ZONE_VIOLATION', 1, '15R-158.45', 'Xe container 15R-158.45', 0.99, '/media/crops/crop_03.jpg', '/videos/BAI_KIEM.mp4'),
+    ('evt-bk-04', datetime('now', '-1 hour'), 'BAI-KIEM', 'zK1', 'ZONE_VIOLATION', 3, NULL, 'Xe hơi trắng', 0.92, '/media/crops/crop_04.jpg', '/videos/BAI_KIEM.mp4'),
+    ('evt-bk-05', datetime('now', '-2 hours'), 'BAI-KIEM', 'zK1', 'ZONE_VIOLATION', 1, 'FL-01', 'Xe nâng FL-01', 0.97, '/media/crops/crop_05.jpg', '/videos/BAI_KIEM.mp4');
+

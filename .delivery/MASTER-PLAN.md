@@ -1,24 +1,22 @@
 ---
 artifact: MASTER-PLAN.md
-version: 1.8.0
+version: 1.9.0
 owner: plan-delivery
 status: approved
-updated_at: "2026-08-19T11:08:25+07:00"
+updated_at: "2026-08-19T14:25:00+07:00"
 depends_on: REQUIREMENTS.md, ARCHITECTURE.md, TECHNICAL-RISKS.md, ADR-001-monolithic-python-fastapi.md, ADR-002-point-in-polygon-zone-evaluation.md, ADR-003-event-cooldown-deduplication.md, ADR-004-llm-text-to-sql-with-fallback.md, ADR-005-Custom-Label-Matching-Architecture.md
 ---
 
 Delivery scope: change-request
 
-# Kế hoạch Triển khai Dự án Giám sát Camera AI (SentriAI Mini) - CR-002 React & YOLOv26
+# Kế hoạch Triển khai Dự án Giám sát Camera AI (SentriAI Mini) - CR-001 & CR-002
 
-## 1. Tổng quan Chiến lược Triển khai CR-002
+## 1. Tổng quan Chiến lược Triển khai CR-001 & CR-002
 
 Hệ thống được tổ chức theo 3 Phase chính:
 - **Phase 1: Project Initialization & Global Foundation Design**: Khởi tạo khung dự án (Backend & Frontend Scaffold), thiết kế hợp đồng toàn cục `API-FOUNDATION.md`, `DATABASE-DESIGN.md` và `UI-UX-FOUNDATION.md`.
-- **Phase 2: Core Data Layer, Engines & Shared Components**: Phát triển CSDL SQLite, Core AI Engine (YOLOv26, Point-in-Polygon, Cooldown) và bộ Shared Components dùng chung (`Header`, `Sidebar`, `AudioBeepPlayer`, `VideoModal`).
-- **Phase 3: Module Implementation & System Integration**: Triển khai 4 Trang/Tab chính, tích hợp thời gian thực WebSocket & Telegram Bot và kiểm thử E2E nghiệm thu.
-
-Các trường `Outputs` được định nghĩa linh hoạt theo dạng mô tả hợp đồng đầu ra (như `docs/contracts/API-FOUNDATION.md`, `frontend/src/`, `backend/database/`) giúp các kỹ sư phát triển chủ động bổ sung tệp mã nguồn mới khi lập trình mà không bị ràng buộc cứng nhắc.
+- **Phase 2: Core Data Layer, Engines & Shared Components**: Phát triển CSDL SQLite (Xe quen/Xe lạ, Polygon zone rules, Custom BBox dataset samples), Core AI Engine (8 nhóm phương tiện/người, Point-in-Polygon, Cooldown) và bộ Shared Components.
+- **Phase 3: Module Implementation & System Integration**: Triển khai 4 Trang/Tab chính (Gate Dashboard LPR, Area Security Dashboard, Zone & Tag Settings với SVG Canvas 4 thao tác & BBox dataset tool, AI Chatbot Assistant với clip 10s bằng chứng).
 
 ---
 
@@ -51,12 +49,12 @@ Các trường `Outputs` được định nghĩa linh hoạt theo dạng mô t�
 - Task type: foundation-design
 - Scope: global
 - Module: none
-- Linked requirements: REQ-001, REQ-002, REQ-003, REQ-005, REQ-008, REQ-009, CR-002
+- Linked requirements: REQ-001, REQ-002, REQ-003, REQ-005, REQ-008, REQ-009, CR-001, CR-002
 - Capability: api-foundation-design
 - Dependencies: TASK-001
 - Inputs: .delivery/REQUIREMENTS.md, .delivery/ARCHITECTURE.md
-- Outputs: .delivery/tasks/TASK-002/API-FOUNDATION.md, docs/contracts/api/api-schema.json, docs/contracts/api/websocket-events.json
-- Completion gate: Xuất bản tài liệu hợp đồng REST API (`API-FOUNDATION.md`) và WebSocket event payloads cho React Hooks.
+- Outputs: .delivery/tasks/TASK-002/API-FOUNDATION.md, .delivery/API-CONTRACT.md, docs/contracts/api/api-schema.json, docs/contracts/api/websocket-events.json
+- Completion gate: Xuất bản tài liệu hợp đồng REST API (`API-FOUNDATION.md`, `API-CONTRACT.md`) quy định rõ 8 loại đối tượng, nhãn Xe quen/Xe lạ, quy tắc Zone và BBox Dataset samples.
 - Verification method: python -m json.tool docs/contracts/api/api-schema.json
 - Parallelizable: yes
 - Write scope: docs/contracts/api/api-schema.json, docs/contracts/api/websocket-events.json
@@ -67,12 +65,12 @@ Các trường `Outputs` được định nghĩa linh hoạt theo dạng mô t�
 - Task type: foundation-design
 - Scope: global
 - Module: none
-- Linked requirements: REQ-001, REQ-002, CR-002
+- Linked requirements: REQ-001, REQ-002, REQ-005, CR-001, CR-002
 - Capability: ui-ux-foundation-design
 - Dependencies: TASK-002
 - Inputs: .delivery/ARCHITECTURE.md
 - Outputs: frontend/src/ (Vite + React SPA structure), backend/ (Python module structure)
-- Completion gate: Khởi tạo khung thư mục React SPA (`frontend/src/`) tích hợp Tailwind CSS, Lucide React, Recharts và cấu trúc mô-đun Backend Python (`backend/`).
+- Completion gate: Khởi tạo khung thư mục React SPA (`frontend/src/`) tích hợp Tailwind CSS, Lucide React, Recharts, SVG Canvas Editor và cấu trúc mô-đun Backend Python (`backend/`).
 - Verification method: npm --prefix frontend run build
 - Parallelizable: yes
 - Write scope: frontend/src/App.tsx, frontend/src/main.tsx, backend/main.py
@@ -90,7 +88,7 @@ Các trường `Outputs` được định nghĩa linh hoạt theo dạng mô t�
 - Dependencies: TASK-002
 - Inputs: .delivery/REQUIREMENTS.md, .delivery/ARCHITECTURE.md
 - Outputs: .delivery/tasks/TASK-003/DATABASE-DESIGN.md, docs/contracts/db/schema.sql
-- Completion gate: Xuất bản tài liệu thiết kế CSDL (`DATABASE-DESIGN.md`), định nghĩa các thực thể Camera, Zone, Event, Tag và Script khởi tạo `schema.sql`.
+- Completion gate: Xuất bản tài liệu thiết kế CSDL (`DATABASE-DESIGN.md`), định nghĩa các thực thể Camera, Zone, Event, Xe quen/Xe lạ và Script khởi tạo `schema.sql`.
 - Verification method: python -m pytest backend/tests/test_database_schema.py
 - Parallelizable: yes
 - Write scope: docs/contracts/db/schema.sql
@@ -126,12 +124,12 @@ Các trường `Outputs` được định nghĩa linh hoạt theo dạng mô t�
 - Task type: implementation
 - Scope: feature
 - Module: database-storage
-- Linked requirements: REQ-001, REQ-006, CR-002
+- Linked requirements: REQ-001, REQ-006, CR-001, CR-002
 - Capability: backend-implementation
 - Dependencies: TASK-003, TASK-005
 - Inputs: docs/contracts/DATABASE-DESIGN.md
 - Outputs: backend/database/ (SQLite Engine & ORM Models)
-- Completion gate: Triển khai ORM/Data Access Layer lưu trữ camera, zone, biển số quen/lạ, dataset nhãn custom và bản ghi vi phạm.
+- Completion gate: Triển khai ORM/Data Access Layer lưu trữ camera, zone, biển số quen/lạ, dataset nhãn custom BBox và bản ghi vi phạm.
 - Verification method: python -m pytest backend/tests/test_database.py
 - Parallelizable: yes
 - Write scope: backend/database/
@@ -142,12 +140,12 @@ Các trường `Outputs` được định nghĩa linh hoạt theo dạng mô t�
 - Task type: implementation
 - Scope: feature
 - Module: ai-vision-pipeline
-- Linked requirements: REQ-004, REQ-007, CR-002
+- Linked requirements: REQ-004, REQ-007, CR-001, CR-002
 - Capability: backend-implementation
 - Dependencies: TASK-001, TASK-006
 - Inputs: .delivery/ARCHITECTURE.md, docs/contracts/API-FOUNDATION.md
 - Outputs: backend/ai/ (Evaluator & Slicer), frontend/src/hooks/ (WebSocket & Sound Hooks)
-- Completion gate: Triển khai thuật toán Point-in-Polygon, cửa sổ trượt lọc trùng lặp Cooldown 15s và custom hooks (`useWebSocket`, `useAudioAlert`).
+- Completion gate: Triển khai phân loại 8 nhóm đối tượng, thuật toán Point-in-Polygon, cửa sổ trượt lọc trùng lặp Cooldown 15s và custom hooks (`useWebSocket`, `useAudioAlert`).
 - Verification method: python -m pytest backend/tests/test_engine.py
 - Parallelizable: yes
 - Write scope: backend/ai/, frontend/src/hooks/
@@ -199,12 +197,12 @@ Các trường `Outputs` được định nghĩa linh hoạt theo dạng mô t�
 - Task type: implementation
 - Scope: feature
 - Module: web-ui
-- Linked requirements: REQ-002, CR-002
+- Linked requirements: REQ-002, CR-001, CR-002
 - Capability: frontend-implementation
 - Dependencies: TASK-007, TASK-008
 - Inputs: docs/contracts/API-FOUNDATION.md, docs/contracts/UI-UX-FOUNDATION.md
 - Outputs: frontend/src/pages/AreaSecurityDashboard.tsx
-- Completion gate: Trang Bãi kiểm render stream BAI-KIEM, phát hiện vi phạm quy tắc zone bằng YOLOv26 và bộ 4 thẻ Recharts KPI visualizers.
+- Completion gate: Trang Bãi kiểm render stream BAI-KIEM, phát hiện vi phạm quy tắc zone 8 loại đối tượng bằng YOLOv26 và bộ thẻ quy tắc phương tiện understream.
 - Verification method: npm --prefix frontend run build
 - Parallelizable: yes
 - Write scope: frontend/src/pages/AreaSecurityDashboard.tsx
@@ -213,16 +211,16 @@ Các trường `Outputs` được định nghĩa linh hoạt theo dạng mô t�
 
 ### Wave 2 (Zone Settings & AI Chatbot)
 
-#### TASK-012 Triển khai Tab 3 — Zone & Tag Settings (SVG Canvas Editor)
+#### TASK-012 Triển khai Tab 3 — Zone & Tag Settings (SVG Canvas & BBox Tool)
 - Task type: implementation
 - Scope: feature
 - Module: web-ui
-- Linked requirements: REQ-005, REQ-006, REQ-007, CR-002
+- Linked requirements: REQ-005, REQ-006, REQ-007, CR-001, CR-002
 - Capability: frontend-implementation
 - Dependencies: TASK-006, TASK-008
 - Inputs: docs/contracts/API-FOUNDATION.md, docs/contracts/UI-UX-FOUNDATION.md
 - Outputs: frontend/src/pages/ZoneTagSettings.tsx, frontend/src/components/zone/
-- Completion gate: Trang Cài đặt tích hợp SVG Canvas Polygon Editor, bảng gán nhãn xe 1-click và timeline scrubber gán nhãn dataset custom.
+- Completion gate: Trang Cài đặt tích hợp SVG Canvas Polygon Editor 4 thao tác kéo thả, bảng gán nhãn Xe quen/Xe lạ 1-click và Dataset BBox Labeling Tool kèm video scrubber.
 - Verification method: npm --prefix frontend run build
 - Parallelizable: yes
 - Write scope: frontend/src/pages/ZoneTagSettings.tsx, frontend/src/components/zone/
@@ -267,12 +265,12 @@ Các trường `Outputs` được định nghĩa linh hoạt theo dạng mô t�
 - Task type: verification
 - Scope: global
 - Module: none
-- Linked requirements: REQ-001, REQ-002, REQ-003, REQ-004, REQ-005, REQ-006, REQ-007, REQ-008, REQ-009, CR-002
+- Linked requirements: REQ-001, REQ-002, REQ-003, REQ-004, REQ-005, REQ-006, REQ-007, REQ-008, REQ-009, CR-001, CR-002
 - Capability: verify-feature
 - Dependencies: TASK-009, TASK-010, TASK-012, TASK-013, TASK-014
 - Inputs: .delivery/REQUIREMENTS.md, .delivery/ARCHITECTURE.md
 - Outputs: docs/reports/e2e-verification-report.md
-- Completion gate: Nghiệm thu toàn bộ 4 tab chính, nhận diện mượt mà với YOLOv26, trích xuất đúng 10s MP4 clip và phát còi bíp Mức 3.
+- Completion gate: Nghiệm thu toàn bộ 4 tab chính, nhận diện mượt mà với 8 loại đối tượng và nhãn Xe quen/Xe lạ, trích xuất đúng 10s MP4 clip và phát còi bíp Mức 3.
 - Verification method: python -m pytest tests/e2e/test_full_system.py
 - Parallelizable: no
 - Write scope: docs/reports/
@@ -288,9 +286,10 @@ Các trường `Outputs` được định nghĩa linh hoạt theo dạng mô t�
 - REQ-002 -> TASK-001, TASK-002, TASK-003, TASK-004, TASK-005, TASK-010, TASK-015
 - REQ-003 -> TASK-002, TASK-004, TASK-008, TASK-014, TASK-015
 - REQ-004 -> TASK-007, TASK-015
-- REQ-005 -> TASK-002, TASK-004, TASK-012, TASK-015
+- REQ-005 -> TASK-002, TASK-004, TASK-005, TASK-012, TASK-015
 - REQ-006 -> TASK-003, TASK-006, TASK-012, TASK-015
 - REQ-007 -> TASK-007, TASK-012, TASK-015
 - REQ-008 -> TASK-002, TASK-013, TASK-015
 - REQ-009 -> TASK-002, TASK-008, TASK-014, TASK-015
+- CR-001 -> TASK-002, TASK-005, TASK-006, TASK-007, TASK-010, TASK-012, TASK-015
 - CR-002 -> TASK-001, TASK-002, TASK-003, TASK-004, TASK-005, TASK-006, TASK-007, TASK-008, TASK-009, TASK-010, TASK-012, TASK-013, TASK-014, TASK-015

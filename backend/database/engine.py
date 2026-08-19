@@ -46,10 +46,13 @@ def init_db(schema_sql_path: str = "docs/contracts/db/schema.sql", target_engine
         raw_conn = target_eng.raw_connection()
         try:
             cursor = raw_conn.cursor()
+            cursor.execute("PRAGMA foreign_keys=OFF;")
             cursor.executescript(sql_script)
+            cursor.execute("PRAGMA foreign_keys=ON;")
             raw_conn.commit()
         finally:
             raw_conn.close()
+
     else:
         # Fallback to SQLAlchemy create_all if schema.sql path is not found directly
         Base.metadata.create_all(bind=target_eng)

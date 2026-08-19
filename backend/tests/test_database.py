@@ -2,13 +2,14 @@ import os
 import pytest
 from datetime import datetime
 from backend.database.engine import get_sqlite_engine, init_db, SessionLocal
-from backend.database.models import Base, Camera, Zone, Vehicle, Event, CustomLabel, KpiRealtimeCache
+from backend.database.models import Base, Camera, Zone, Vehicle, Event, CustomLabel, DatasetSource, BBoxSample, KpiRealtimeCache
 from backend.database.repository import (
     CameraRepository,
     ZoneRepository,
     VehicleRepository,
     EventRepository,
     CustomLabelRepository,
+    DatasetRepository,
     KpiRepository,
 )
 
@@ -65,36 +66,46 @@ def test_zone_repository(db_session):
         id="zone-test-1",
         camera_id="CAM-Z1",
         name="Vùng Cấm Test",
-        vertices=[[0.1, 0.1], [0.9, 0.1], [0.8, 0.8], [0.2, 0.8]],
-        allowed_classes=["person"],
-        forbidden_classes=["forklift"],
+        vertices=[{"x": 10.0, "y": 10.0}, {"x": 90.0, "y": 10.0}, {"x": 80.0, "y": 80.0}],
+        allowed_classes=["person", "car"],
+        forbidden_classes=["forklift", "truck", "container"],
         is_active=True,
     )
     saved = zone_repo.create(zone)
     assert saved.id == "zone-test-1"
 
-    zones = zone_repo.get_by_camera("CAM-Z1")
-    assert len(zones) >= 1
+    # Test update polygon zone vertices (4-thao tác SVG polygon editing)
+    updated = zone_repo.update_zone(
+        zone_id="zone-test-1",
+        name="Vùng Cấm Xe Nâng Updated",
+        vertices=[{"x": 12.0, "y": 12.0}, {"x": 95.0, "y": 10.0}, {"x": 85.0, "y": 85.0}, {"x": 15.0, "y": 80.0}],
+        forbidden_classes=["forklift", "truck", "container", "crane"]
+    )
+    assert updated is not None
+    assert updated.name == "Vùng Cấm Xe Nâng Updated"
+    assert len(updated.vertices) == 4
+    assert "crane" in updated.forbidden_classes
 
-def test_vehicle_repository(db_session):
+def test_vehicle_repository_known_unknown(db_session):
     repo = VehicleRepository(db_session)
     v1 = Vehicle(
         id="v-test-1",
         license_plate="29A-999.99",
-        vehicle_type="Truck",
-        tag_label="blacklisted",
-        notes="Xe nghi vấn",
+        vehicle_type="truck",
+        tag_label="unknown",
+        notes="Xe mới xuất hiện",
     )
     saved = repo.upsert(v1)
     assert saved.license_plate == "29A-999.99"
-    assert saved.total_entries == 1
+    assert saved.tag_label == "unknown"
 
-    # Upsert again -> increment total_entries
-    saved_again = repo.upsert(v1)
-    assert saved_again.total_entries == 2
+    # 1-click update tag label to Xe quen ('known')
+    updated = repo.update_tag("29A-999.99", tag_label="known", notes="Đã xác minh xe công ty")
+    assert updated is not None
+    assert updated.tag_label == "known"
 
-    blacklisted = repo.list_all(tag_label="blacklisted")
-    assert len(blacklisted) >= 1
+    stats = repo.get_stats()
+    assert stats["known"] >= 1
 
 def test_event_repository(db_session):
     cam_repo = CameraRepository(db_session)
@@ -119,13 +130,58 @@ def test_event_repository(db_session):
     assert len(recent) >= 1
     assert recent[0].severity_level == 3
 
-def test_custom_label_repository(db_session):
-    repo = CustomLabelRepository(db_session)
-    lbl = repo.create_or_increment("xe_nang_ui", category="machinery")
-    assert lbl.sample_count == 1
+def test_dataset_bbox_samples_and_zone_sync(db_session):
+    # Setup camera and zone
+    cam_repo = CameraRepository(db_session)
+    cam_repo.create(Camera(id="CAM-DS1", name="Dataset Cam", location="Loc", stream_url="url"))
+    
+    zone_repo = ZoneRepository(db_session)
+    zone_repo.create(Zone(
+        id="zone-ds-1",
+        camera_id="CAM-DS1",
+        name="Zone Dataset Sync",
+        vertices=[{"x": 0, "y": 0}, {"x": 100, "y": 0}, {"x": 100, "y": 100}],
+        allowed_classes=["car"],
+        forbidden_classes=["truck"],
+        is_active=True,
+    ))
 
-    lbl2 = repo.create_or_increment("xe_nang_ui", category="machinery")
-    assert lbl2.sample_count == 2
+    dataset_repo = DatasetRepository(db_session)
+    # Create dataset source
+    src = dataset_repo.create_source(DatasetSource(
+        id="src-video-01",
+        name="Demo Frame Clip 01",
+        kind="video",
+        url="/videos/BAI-KIEM.mp4",
+        duration_seconds=120.0,
+        total_frames=1200
+    ))
+    assert src.id == "src-video-01"
+
+    # Batch save BBox annotation samples
+    samples_payload = [
+        {
+            "id": "bbox-sample-01",
+            "label_id": "lbl-container-khac",
+            "source_id": "src-video-01",
+            "frame_index": 45,
+            "x": 20.5,
+            "y": 30.0,
+            "w": 40.0,
+            "h": 50.0,
+            "category": "vehicle_shape",
+            "label_name": "container_20ft_custom"
+        }
+    ]
+    saved_samples = dataset_repo.save_samples_batch(samples_payload)
+    assert len(saved_samples) == 1
+    assert saved_samples[0].label_name == "container_20ft_custom"
+
+    # Sync custom labels to zones
+    sync_res = dataset_repo.sync_custom_labels_to_zones()
+    assert sync_res["synced_count"] >= 1
+    assert "container_20ft_custom" in sync_res["synced_labels"]
+    assert sync_res["affected_zones"] >= 1
 
 def test_kpi_repository(db_session):
     repo = KpiRepository(db_session)

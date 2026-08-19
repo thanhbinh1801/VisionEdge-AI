@@ -1,8 +1,8 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "title": "SentriAI Mini REST API Schema Foundation",
-  "description": "JSON Schema definition for all REST API endpoints and data models in SentriAI Mini (CR-002)",
-  "version": "1.0.0",
+  "title": "SentriAI Mini REST API Schema Foundation (CR-001 & CR-002)",
+  "description": "JSON Schema definition for all REST API endpoints, schemas, and data models in SentriAI Mini",
+  "version": "1.1.0",
   "definitions": {
     "ResponseEnvelope": {
       "type": "object",
@@ -87,6 +87,25 @@
         }
       }
     },
+    "ObjectTypeEnum": {
+      "type": "string",
+      "enum": [
+        "container",
+        "truck",
+        "forklift",
+        "crane",
+        "car",
+        "motorbike",
+        "bicycle",
+        "person"
+      ],
+      "description": "8 loại đối tượng/phương tiện được phân loại theo quy tắc CR-001"
+    },
+    "VehicleTagLabelEnum": {
+      "type": "string",
+      "enum": ["known", "unknown"],
+      "description": "Nhãn phân định Xe quen (đã xác thực/hợp lệ) hoặc Xe lạ (chưa ghi nhận/cần chú ý)"
+    },
     "Camera": {
       "type": "object",
       "required": ["id", "name", "location", "stream_url", "status", "fps"],
@@ -109,29 +128,32 @@
       "type": "object",
       "required": ["x", "y"],
       "properties": {
-        "x": { "type": "number", "description": "Tọa độ X chuẩn hóa từ 0.0 đến 1.0 hoặc điểm pixel" },
-        "y": { "type": "number", "description": "Tọa độ Y chuẩn hóa từ 0.0 đến 1.0 hoặc điểm pixel" }
+        "x": { "type": "number", "description": "Tọa độ X tương đối (0.0 - 100.0) trên Canvas SVG" },
+        "y": { "type": "number", "description": "Tọa độ Y tương đối (0.0 - 100.0) trên Canvas SVG" }
       }
     },
     "Zone": {
       "type": "object",
-      "required": ["id", "camera_id", "name", "vertices", "allowed_classes", "forbidden_classes", "is_active"],
+      "required": ["id", "camera_id", "name", "vertices", "allowed_object_types", "prohibited_object_types", "is_active"],
       "properties": {
         "id": { "type": "string" },
-        "camera_id": { "type": "string" },
+        "camera_id": { "type": "string", "enum": ["BAI-KIEM", "GATE-01"] },
         "name": { "type": "string" },
         "vertices": {
           "type": "array",
           "items": { "$ref": "#/definitions/Point2D" },
-          "minItems": 3
+          "minItems": 3,
+          "description": "Danh sách đỉnh đa giác SVG 4 thao tác (thêm góc, kéo đỉnh, kéo điểm giữa cạnh, kéo thân)"
         },
-        "allowed_classes": {
+        "allowed_object_types": {
           "type": "array",
-          "items": { "type": "string" }
+          "items": { "$ref": "#/definitions/ObjectTypeEnum" },
+          "description": "Danh sách các loại xe/đối tượng ĐƯỢC PHÉP vào zone (Tick ✓)"
         },
-        "forbidden_classes": {
+        "prohibited_object_types": {
           "type": "array",
-          "items": { "type": "string" }
+          "items": { "$ref": "#/definitions/ObjectTypeEnum" },
+          "description": "Danh sách các loại xe/đối tượng BỊ CẤM vào zone (Tick ✕)"
         },
         "is_active": { "type": "boolean" },
         "color": { "type": "string", "default": "#EF4444" }
@@ -143,14 +165,12 @@
       "properties": {
         "id": { "type": "string" },
         "license_plate": { "type": "string" },
-        "vehicle_type": { "type": "string" },
-        "tag_label": {
-          "type": "string",
-          "enum": ["known", "unknown", "blacklisted"]
-        },
+        "vehicle_type": { "$ref": "#/definitions/ObjectTypeEnum" },
+        "tag_label": { "$ref": "#/definitions/VehicleTagLabelEnum" },
         "crop_image_url": { "type": "string" },
         "last_seen_at": { "type": "string", "format": "date-time" },
-        "total_entries": { "type": "integer", "minimum": 0 }
+        "total_entries": { "type": "integer", "minimum": 0 },
+        "notes": { "type": "string" }
       }
     },
     "Event": {
@@ -177,10 +197,11 @@
         "severity_level": {
           "type": "integer",
           "enum": [1, 2, 3],
-          "description": "1: Green (Xe quen/Hợp lệ), 2: Yellow (Xe lạ/Chú ý), 3: Red (Vi phạm zone)"
+          "description": "1: Green (Xe quen/Hợp lệ), 2: Yellow (Xe lạ/Chú ý), 3: Red (Vi phạm zone cấm)"
         },
         "license_plate": { "type": "string" },
-        "object_class": { "type": "string" },
+        "vehicle_label": { "$ref": "#/definitions/VehicleTagLabelEnum" },
+        "object_class": { "$ref": "#/definitions/ObjectTypeEnum" },
         "confidence": { "type": "number", "minimum": 0, "maximum": 1.0 },
         "bbox": {
           "type": "array",
@@ -199,9 +220,60 @@
       "properties": {
         "id": { "type": "string" },
         "label_name": { "type": "string" },
-        "category": { "type": "string", "enum": ["person", "vehicle", "equipment", "custom"] },
+        "category": { "type": "string", "enum": ["person", "vehicle_shape"] },
         "sample_count": { "type": "integer", "minimum": 0 },
         "updated_at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "DatasetSource": {
+      "type": "object",
+      "required": ["id", "name", "kind", "url"],
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "kind": { "type": "string", "enum": ["img", "video"] },
+        "url": { "type": "string" },
+        "duration_seconds": { "type": "number" },
+        "total_frames": { "type": "integer" }
+      }
+    },
+    "BBoxSample": {
+      "type": "object",
+      "required": ["id", "label_id", "source_id", "x", "y", "w", "h", "category"],
+      "properties": {
+        "id": { "type": "string" },
+        "label_id": { "type": "string" },
+        "source_id": { "type": "string" },
+        "frame_index": { "type": "integer" },
+        "x": { "type": "number", "description": "Tọa độ góc trái X (%)" },
+        "y": { "type": "number", "description": "Tọa độ góc trên Y (%)" },
+        "w": { "type": "number", "description": "Chiều rộng BBox (%)" },
+        "h": { "type": "number", "description": "Chiều cao BBox (%)" },
+        "category": { "type": "string", "enum": ["person", "vehicle_shape"] },
+        "label_name": { "type": "string" },
+        "created_at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "BBoxBatchSaveRequest": {
+      "type": "object",
+      "required": ["samples"],
+      "properties": {
+        "samples": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/BBoxSample" }
+        }
+      }
+    },
+    "DatasetSyncZonesResponse": {
+      "type": "object",
+      "required": ["synced_count", "synced_labels", "affected_zones"],
+      "properties": {
+        "synced_count": { "type": "integer" },
+        "synced_labels": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "affected_zones": { "type": "integer" }
       }
     },
     "ChatbotQueryRequest": {
