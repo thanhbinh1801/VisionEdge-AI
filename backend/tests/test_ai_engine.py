@@ -73,3 +73,10 @@ def test_video_stream_service_init():
     stream = VideoStreamService(camera_id="BAI-KIEM")
     assert stream.camera_id == "BAI-KIEM"
     assert os.path.exists(stream.video_path)
+
+def test_process_frame_confidence_threshold_filtering():
+    pipeline = AIVisionPipeline()
+    dets = pipeline.process_frame(None, conf_threshold=0.50)
+    assert isinstance(dets, list)
+    assert len(dets) == 0
+

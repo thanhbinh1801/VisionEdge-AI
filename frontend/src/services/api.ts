@@ -14,17 +14,32 @@ export interface LiveDetection {
   zone_name?: string;
 }
 
+export interface LiveDetectionSnapshot {
+  detections: LiveDetection[];
+  frameId?: string;
+  frameTimestamp?: string;
+}
+
+export interface VideoFrameMetadata {
+  sourceName: string;
+  fps?: number;
+  totalFrames?: number;
+  frameIndex: number;
+  timestampSeconds: number;
+}
+
+export interface VideoFrameResult {
+  blob: Blob;
+  metadata: VideoFrameMetadata;
+}
+
 export async function fetchLatestEvents(cameraId?: string, limit: number = 20): Promise<EventRecord[]> {
-  try {
-    const url = cameraId 
-      ? `${API_BASE_URL}/events?camera_id=${cameraId}&limit=${limit}`
-      : `${API_BASE_URL}/events?limit=${limit}`;
-    const res = await fetch(url);
-    if (!res.ok) throw new Error(`HTTP error ${res.status}`);
-    return await res.json();
-  } catch {
-    return [];
-  }
+  const url = cameraId
+    ? `${API_BASE_URL}/events?camera_id=${encodeURIComponent(cameraId)}&limit=${limit}`
+    : `${API_BASE_URL}/events?limit=${limit}`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Không thể tải sự kiện (HTTP ${res.status})`);
+  return await res.json();
 }
 
 const CLASS_ALIAS_MAP: Record<string, string[]> = {
@@ -74,6 +89,27 @@ export async function fetchZones(cameraId?: string): Promise<ZoneConfig[]> {
   } catch {
     return [];
   }
+}
+
+export async function fetchZonesStrict(cameraId?: string): Promise<ZoneConfig[]> {
+  const url = cameraId
+    ? `${API_BASE_URL}/zones?camera_id=${encodeURIComponent(cameraId)}`
+    : `${API_BASE_URL}/zones`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Không thể tải cấu hình zone (HTTP ${res.status})`);
+  const data = await res.json();
+  return data.map((z: any) => ({
+    id: z.id,
+    name: z.name,
+    camera_id: z.camera_id,
+    color: z.color || '#EF4444',
+    points: Array.isArray(z.vertices)
+      ? z.vertices.map((pt: any) => (Array.isArray(pt) ? pt : [pt.x, pt.y]))
+      : [],
+    types: buildTypesMap(z.allowed_classes),
+    allowed_classes: z.allowed_classes || [],
+    forbidden_classes: z.forbidden_classes || [],
+  }));
 }
 
 export async function createZoneApi(zone: {
@@ -146,14 +182,18 @@ export async function deleteZoneApi(zoneId: string): Promise<boolean> {
   }
 }
 
-export async function fetchLiveDetections(cameraId: string = 'BAI-KIEM'): Promise<LiveDetection[]> {
-  try {
-    const res = await fetch(`${API_BASE_URL}/events/live-detections?camera_id=${cameraId}`);
-    if (!res.ok) throw new Error(`HTTP error ${res.status}`);
-    return await res.json();
-  } catch {
-    return [];
+export async function fetchLiveDetections(cameraId: string = 'BAI-KIEM', confThreshold: number = 0.35, videoTime?: number): Promise<LiveDetectionSnapshot> {
+  let url = `${API_BASE_URL}/events/live-detections?camera_id=${encodeURIComponent(cameraId)}&conf_threshold=${confThreshold}`;
+  if (typeof videoTime === 'number') {
+    url += `&video_time=${videoTime.toFixed(2)}`;
   }
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Dịch vụ AI không phản hồi (HTTP ${res.status})`);
+  return {
+    detections: await res.json(),
+    frameId: res.headers.get('X-Frame-Id') || undefined,
+    frameTimestamp: res.headers.get('X-Frame-Timestamp') || undefined,
+  };
 }
 
 export async function fetchVehicles(): Promise<VehicleTag[]> {
@@ -193,4 +233,44 @@ export async function fetchKpiMetrics(): Promise<KpiData> {
       hourlyTrends: [],
     };
   }
+}
+
+export async function fetchZoneFrame(
+  cameraId: string,
+  selector: { timestamp?: number; frameIndex?: number } = {},
+): Promise<VideoFrameResult> {
+  const params = new URLSearchParams({ camera_id: cameraId });
+  if (selector.timestamp !== undefined) params.set('timestamp', String(selector.timestamp));
+  if (selector.frameIndex !== undefined) params.set('frame_index', String(selector.frameIndex));
+  const response = await fetch(`${API_BASE_URL}/zones/video-frame?${params.toString()}`);
+  if (!response.ok) throw new Error(`Không thể tải frame preview (HTTP ${response.status})`);
+
+  const frameIndex = Number(response.headers.get('X-Frame-Index'));
+  const timestampSeconds = Number(response.headers.get('X-Frame-Timestamp'));
+  const fps = Number(response.headers.get('X-Video-Fps'));
+  const totalFrames = Number(response.headers.get('X-Video-Frame-Count'));
+  const encodedSource = response.headers.get('X-Video-Source');
+  return {
+    blob: await response.blob(),
+    metadata: {
+      sourceName: encodedSource ? decodeURIComponent(encodedSource) : cameraId,
+      fps: Number.isFinite(fps) && fps > 0 ? fps : undefined,
+      totalFrames: Number.isFinite(totalFrames) && totalFrames > 0 ? totalFrames : undefined,
+      frameIndex: Number.isFinite(frameIndex) ? frameIndex : selector.frameIndex ?? 0,
+      timestampSeconds: Number.isFinite(timestampSeconds)
+        ? timestampSeconds
+        : selector.timestamp ?? 0,
+    },
+  };
+}
+
+export function getVideoFeedUrl(
+  cameraId: string,
+  options: { drawZones?: boolean } = {},
+): string {
+  const params = new URLSearchParams({ camera_id: cameraId });
+  if (options.drawZones !== undefined) {
+    params.set('draw_zones', String(options.drawZones));
+  }
+  return `${API_BASE_URL}/events/video-feed?${params.toString()}`;
 }

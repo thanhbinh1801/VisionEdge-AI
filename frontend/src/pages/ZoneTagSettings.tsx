@@ -1,6 +1,14 @@
-import React, { useState, useRef } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { useApp } from '../context/AppContext';
 import { usePolygonEditor } from '../hooks/usePolygonEditor';
+import { fetchZoneFrame, VideoFrameMetadata } from '../services/api';
+
+const formatTimestamp = (seconds: number) => {
+  const safeSeconds = Math.max(0, Math.round(seconds));
+  const minutes = Math.floor(safeSeconds / 60);
+  const remainder = safeSeconds % 60;
+  return `${String(minutes).padStart(2, '0')}:${String(remainder).padStart(2, '0')}`;
+};
 
 export const ZoneTagSettings: React.FC = () => {
   const {
@@ -31,9 +39,51 @@ export const ZoneTagSettings: React.FC = () => {
   const [camSel, setCamSel] = useState<string>('BAI-KIEM');
   const [editingZoneCardId, setEditingZoneCardId] = useState<string | null>(null);
   const [editingZoneCardText, setEditingZoneCardText] = useState<string>('');
+  const [zoneFrameError, setZoneFrameError] = useState<string>('');
+  const [zoneFrameSrc, setZoneFrameSrc] = useState<string>('');
+  const [zoneFrameStatus, setZoneFrameStatus] = useState<'loading' | 'success' | 'error'>('loading');
+  const [zoneFrameIndex, setZoneFrameIndex] = useState(0);
+  const [zoneFrameDraft, setZoneFrameDraft] = useState(0);
+  const [zoneFrameMeta, setZoneFrameMeta] = useState<VideoFrameMetadata | null>(null);
+  const [zoneFrameRetry, setZoneFrameRetry] = useState(0);
 
 
   const curCamZones = zonesByCam[camSel] || [];
+
+  useEffect(() => {
+    let active = true;
+    let objectUrl = '';
+    setZoneFrameError('');
+    setZoneFrameStatus('loading');
+    fetchZoneFrame(camSel, { frameIndex: zoneFrameIndex })
+      .then(({ blob, metadata }) => {
+        if (!active) return;
+        objectUrl = URL.createObjectURL(blob);
+        setZoneFrameSrc(objectUrl);
+        setZoneFrameMeta(metadata);
+      })
+      .catch((error: unknown) => {
+        if (!active) return;
+        setZoneFrameStatus('error');
+        setZoneFrameError(error instanceof Error ? error.message : 'Không tải được frame video nền.');
+      });
+    return () => {
+      active = false;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [camSel, zoneFrameIndex, zoneFrameRetry]);
+
+  useEffect(() => {
+    setZoneFrameIndex(0);
+    setZoneFrameDraft(0);
+    setZoneFrameMeta(null);
+  }, [camSel]);
+
+  const retryZoneFrame = () => {
+    setZoneFrameError('');
+    setZoneFrameStatus('loading');
+    setZoneFrameRetry((value) => value + 1);
+  };
   const {
     tool,
     setTool,
@@ -63,6 +113,12 @@ export const ZoneTagSettings: React.FC = () => {
   const [savedMsg, setSavedMsg] = useState<string>('');
   const [annPick, setAnnPick] = useState<string | null>(null); // Selected sample ID on canvas
   const [annDraft, setAnnDraft] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
+  const [annFrameDraft, setAnnFrameDraft] = useState(1);
+  const [annFrameSrc, setAnnFrameSrc] = useState('');
+  const [annFrameMeta, setAnnFrameMeta] = useState<VideoFrameMetadata | null>(null);
+  const [annFrameStatus, setAnnFrameStatus] = useState<'loading' | 'success' | 'error'>('loading');
+  const [annFrameError, setAnnFrameError] = useState('');
+  const [annFrameRetry, setAnnFrameRetry] = useState(0);
 
   const annDragRef = useRef<{ x0: number; y0: number } | null>(null);
 
@@ -174,6 +230,41 @@ export const ZoneTagSettings: React.FC = () => {
   };
 
   const currentAnnSource = annSources.find((s) => s.id === annSrc) || annSources[0];
+  const annCameraId = currentAnnSource.name.toLowerCase().includes('gate') ? 'GATE-01' : 'BAI-KIEM';
+
+  useEffect(() => {
+    if (currentAnnSource.kind !== 'video') {
+      setAnnFrameSrc('');
+      setAnnFrameMeta(null);
+      setAnnFrameError('');
+      return;
+    }
+    let active = true;
+    let objectUrl = '';
+    setAnnFrameStatus('loading');
+    setAnnFrameError('');
+    fetchZoneFrame(annCameraId, { frameIndex: vidFrame })
+      .then(({ blob, metadata }) => {
+        if (!active) return;
+        objectUrl = URL.createObjectURL(blob);
+        setAnnFrameSrc(objectUrl);
+        setAnnFrameMeta(metadata);
+      })
+      .catch((error: unknown) => {
+        if (!active) return;
+        setAnnFrameStatus('error');
+        setAnnFrameError(error instanceof Error ? error.message : 'Không tải được frame dataset.');
+      });
+    return () => {
+      active = false;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [annCameraId, currentAnnSource.kind, vidFrame, annFrameRetry]);
+
+  useEffect(() => {
+    setAnnFrameDraft(vidFrame);
+  }, [vidFrame]);
+
   const frameKey = currentAnnSource.id + (currentAnnSource.kind === 'video' ? ':' + vidFrame : '');
   const activeAnnBoxes = annSamples.filter(
     (s) =>
@@ -384,15 +475,14 @@ export const ZoneTagSettings: React.FC = () => {
           {/* Left Column: Interactive Canvas */}
           <div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '10px', flexWrap: 'wrap' }}>
-              {/* Camera Selector Pills */}
               <div
                 style={{
                   display: 'flex',
+                  gap: '4px',
                   background: 'var(--card)',
                   border: '1px solid var(--line)',
                   borderRadius: '10px',
                   padding: '4px',
-                  gap: '2px',
                 }}
               >
                 {[
@@ -406,6 +496,7 @@ export const ZoneTagSettings: React.FC = () => {
                       onClick={() => {
                         setCamSel(c.id);
                         setZoneSel(null);
+                        setZoneFrameError('');
                       }}
                       style={{
                         fontSize: '12px',
@@ -424,6 +515,23 @@ export const ZoneTagSettings: React.FC = () => {
                     </button>
                   );
                 })}
+              </div>
+
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  padding: '6px 12px',
+                  borderRadius: '10px',
+                  background: 'var(--card)',
+                  border: '1px solid var(--line)',
+                  fontSize: '12px',
+                  fontWeight: 600,
+                  color: 'var(--ink2)',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                Camera kiểm thử · {camSel === 'GATE-01' ? 'Cổng vào' : 'Bãi Kiểm'}
               </div>
 
               {/* Tool Pills */}
@@ -537,28 +645,58 @@ export const ZoneTagSettings: React.FC = () => {
                 userSelect: 'none',
               }}
             >
-              {/* Real Overhead Camera Background Image (Prototype Asset) */}
+              {/* Real Overhead Camera Background Image from backend-extracted video frame */}
               <img
-                src={camSel === 'GATE-01' ? '/assets/cam-gate.png' : '/assets/cam-baikiem.png'}
+                src={zoneFrameSrc}
                 alt={`${camSel} Camera View`}
+                onLoad={() => setZoneFrameStatus('success')}
+                onError={() => {
+                  setZoneFrameStatus('error');
+                  setZoneFrameError('Không tải được frame video nền từ backend.');
+                }}
                 style={{
                   position: 'absolute',
                   inset: 0,
                   width: '100%',
                   height: '100%',
                   objectFit: 'cover',
-                  opacity: 0.85,
+                  opacity: 1,
                   pointerEvents: 'none',
                 }}
               />
-              <div
-                style={{
-                  position: 'absolute',
-                  inset: 0,
-                  background: 'rgba(6,10,14,.10)',
-                  pointerEvents: 'none',
-                }}
-              />
+              {zoneFrameStatus !== 'success' && (
+                <div
+                  role={zoneFrameStatus === 'error' ? 'alert' : 'status'}
+                  aria-live="polite"
+                  style={{
+                    position: 'absolute',
+                    inset: 0,
+                    display: 'grid',
+                    placeItems: 'center',
+                    textAlign: 'center',
+                    background: 'rgba(0,0,0,.72)',
+                    color: '#fff',
+                    fontSize: '12px',
+                    zIndex: 4,
+                  }}
+                >
+                  <div>
+                    <div>{zoneFrameStatus === 'error' ? zoneFrameError : 'Đang trích xuất frame thật…'}</div>
+                    {zoneFrameStatus === 'error' && (
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          retryZoneFrame();
+                        }}
+                        style={{ marginTop: '9px', padding: '5px 10px', cursor: 'pointer' }}
+                      >
+                        Thử lại
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
 
 
               {/* Camera Badges */}
@@ -576,7 +714,7 @@ export const ZoneTagSettings: React.FC = () => {
                   pointerEvents: 'none',
                 }}
               >
-                {camSel} · {camSel === 'GATE-01' ? 'Cổng vào' : 'Bãi Kiểm'}
+                {zoneFrameMeta?.sourceName || camSel} · frame {zoneFrameMeta?.frameIndex ?? zoneFrameIndex}
               </div>
               <div
                 style={{
@@ -592,7 +730,9 @@ export const ZoneTagSettings: React.FC = () => {
                   pointerEvents: 'none',
                 }}
               >
-                {clock} · góc trên cao
+                {zoneFrameMeta
+                  ? `${formatTimestamp(zoneFrameMeta.timestampSeconds)} · ${zoneFrameMeta.fps?.toFixed(1) ?? '?'} FPS`
+                  : `${clock} · góc trên cao`}
               </div>
 
               {/* SVG Polygons */}
@@ -735,6 +875,24 @@ export const ZoneTagSettings: React.FC = () => {
                     }}
                   />
                 ))}
+            </div>
+
+            <div style={{ marginTop: '9px', padding: '9px 12px', background: 'var(--card)', border: '1px solid var(--line)', borderRadius: '10px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', marginBottom: '6px', fontSize: '11px', color: 'var(--ink3)' }}>
+                <span>Frame preview: {zoneFrameDraft}</span>
+                <span>{zoneFrameMeta ? `${zoneFrameMeta.sourceName} · ${formatTimestamp(zoneFrameMeta.timestampSeconds)}` : 'Đang đọc metadata…'}</span>
+              </div>
+              <input
+                type="range"
+                min={0}
+                max={Math.max(0, (zoneFrameMeta?.totalFrames ?? 301) - 1)}
+                value={Math.min(zoneFrameDraft, Math.max(0, (zoneFrameMeta?.totalFrames ?? 301) - 1))}
+                onChange={(event) => setZoneFrameDraft(Number(event.target.value))}
+                onPointerUp={(event) => setZoneFrameIndex(Number(event.currentTarget.value))}
+                onKeyUp={(event) => setZoneFrameIndex(Number(event.currentTarget.value))}
+                aria-label="Chọn frame nền cho Zone Editor"
+                style={{ width: '100%' }}
+              />
             </div>
           </div>
 
@@ -929,7 +1087,10 @@ export const ZoneTagSettings: React.FC = () => {
                     key={s.id}
                     onClick={() => {
                       setAnnSrc(s.id);
+                      setVidFrame(0);
+                      setAnnFrameDraft(0);
                       setAnnDraft(null);
+                      setAnnPick(null);
                     }}
                     style={{
                       position: 'relative',
@@ -1011,23 +1172,53 @@ export const ZoneTagSettings: React.FC = () => {
                 userSelect: 'none',
               }}
             >
-              {/* Background gradient simulating photo/frame */}
-              <div
-                style={{
-                  position: 'absolute',
-                  inset: 0,
-                  pointerEvents: 'none',
-                  background: `linear-gradient(150deg, ${currentAnnSource.tint || '#1a2129'}, #0c0f13)`,
-                }}
-              />
-              <div
-                style={{
-                  position: 'absolute',
-                  inset: 0,
-                  background: 'rgba(6,10,14,.12)',
-                  pointerEvents: 'none',
-                }}
-              />
+              {currentAnnSource.kind === 'video' ? (
+                <img
+                  src={annFrameSrc}
+                  alt={`Dataset frame ${vidFrame}`}
+                  onLoad={() => setAnnFrameStatus('success')}
+                  onError={() => {
+                    setAnnFrameStatus('error');
+                    setAnnFrameError('Không hiển thị được frame dataset đã tải.');
+                  }}
+                  style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', pointerEvents: 'none' }}
+                />
+              ) : (
+                <div
+                  style={{
+                    position: 'absolute',
+                    inset: 0,
+                    pointerEvents: 'none',
+                    background: `linear-gradient(150deg, ${currentAnnSource.tint || '#1a2129'}, #0c0f13)`,
+                  }}
+                />
+              )}
+
+              {currentAnnSource.kind === 'video' && annFrameStatus !== 'success' && (
+                <div
+                  role={annFrameStatus === 'error' ? 'alert' : 'status'}
+                  aria-live="polite"
+                  style={{ position: 'absolute', inset: 0, zIndex: 5, display: 'grid', placeItems: 'center', background: 'rgba(0,0,0,.72)', color: '#fff', textAlign: 'center', fontSize: '12px' }}
+                >
+                  <div>
+                    <div>{annFrameStatus === 'error' ? annFrameError : 'Đang tải frame dataset…'}</div>
+                    {annFrameStatus === 'error' && (
+                      <button
+                        type="button"
+                        onMouseDown={(event) => event.stopPropagation()}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          setAnnFrameStatus('loading');
+                          setAnnFrameRetry((value) => value + 1);
+                        }}
+                        style={{ marginTop: '9px', padding: '5px 10px', cursor: 'pointer' }}
+                      >
+                        Thử lại
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
 
               {/* Source Name Badge */}
               <div
@@ -1046,7 +1237,7 @@ export const ZoneTagSettings: React.FC = () => {
               >
                 {currentAnnSource.name}
                 {currentAnnSource.kind === 'video'
-                  ? ` · khung ${['00:12', '00:47', '01:23', '02:05'][vidFrame]}`
+                  ? ` · ${annFrameMeta?.sourceName || annCameraId} · frame ${annFrameMeta?.frameIndex ?? vidFrame} · ${formatTimestamp(annFrameMeta?.timestampSeconds ?? 0)}`
                   : ''}
               </div>
 
@@ -1130,36 +1321,32 @@ export const ZoneTagSettings: React.FC = () => {
                 <span style={{ fontSize: '10.5px', color: 'var(--ink3)', fontFamily: "'IBM Plex Mono', monospace" }}>
                   00:00
                 </span>
-                <div style={{ flex: 1, height: '5px', borderRadius: '3px', background: 'var(--raise)', position: 'relative' }}>
-                  {['8%', '31%', '55%', '82%'].map((x, idx) => (
-                    <button
-                      key={idx}
-                      onClick={() => {
-                        setVidFrame(idx);
-                        setAnnDraft(null);
-                      }}
-                      title="Chọn khung hình"
-                      style={{
-                        position: 'absolute',
-                        left: x,
-                        top: '50%',
-                        width: '12px',
-                        height: '12px',
-                        margin: '-6px 0 0 -6px',
-                        borderRadius: '50%',
-                        border: '2px solid #fff',
-                        background: vidFrame === idx ? 'var(--acc)' : 'var(--ink3)',
-                        cursor: 'pointer',
-                        padding: 0,
-                      }}
-                    />
-                  ))}
-                </div>
+                <input
+                  type="range"
+                  min={0}
+                  max={Math.max(0, (annFrameMeta?.totalFrames ?? 301) - 1)}
+                  value={Math.min(annFrameDraft, Math.max(0, (annFrameMeta?.totalFrames ?? 301) - 1))}
+                  onChange={(event) => setAnnFrameDraft(Number(event.target.value))}
+                  onPointerUp={(event) => {
+                    setVidFrame(Number(event.currentTarget.value));
+                    setAnnDraft(null);
+                    setAnnPick(null);
+                  }}
+                  onKeyUp={(event) => {
+                    setVidFrame(Number(event.currentTarget.value));
+                    setAnnDraft(null);
+                    setAnnPick(null);
+                  }}
+                  aria-label="Chọn frame cho Dataset BBox Tool"
+                  style={{ flex: 1 }}
+                />
                 <span style={{ fontSize: '10.5px', color: 'var(--ink3)', fontFamily: "'IBM Plex Mono', monospace" }}>
-                  02:30
+                  {formatTimestamp(
+                    ((annFrameMeta?.totalFrames ?? 301) - 1) / (annFrameMeta?.fps ?? 30),
+                  )}
                 </span>
                 <span style={{ fontSize: '10.5px', color: 'var(--ink2)' }}>
-                  khung hình {['00:12', '00:47', '01:23', '02:05'][vidFrame]}
+                  frame {annFrameDraft} · {formatTimestamp(annFrameDraft / (annFrameMeta?.fps ?? 30))}
                 </span>
               </div>
             )}
@@ -1326,7 +1513,12 @@ export const ZoneTagSettings: React.FC = () => {
                 {currentAnnSource.kind === 'video' && (
                   <button
                     onClick={() => {
-                      setVidFrame((prev) => (prev + 1) % 4);
+                      const nextFrame = Math.min(
+                        vidFrame + 1,
+                        Math.max(0, (annFrameMeta?.totalFrames ?? 301) - 1),
+                      );
+                      setVidFrame(nextFrame);
+                      setAnnFrameDraft(nextFrame);
                       setAnnDraft(null);
                       setSavedMsg('');
                       setAnnPick(null);

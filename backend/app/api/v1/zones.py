@@ -1,14 +1,56 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
-from typing import List, Optional, Any
+import uuid
 from datetime import datetime
+from typing import Any, List, Optional
+from urllib.parse import quote
+
+from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
+
+from app.services.frame_extractor import extract_jpeg_frame, resolve_video_path
 from backend.database.engine import get_db
-from backend.database.repository import ZoneRepository
 from backend.database.models import Zone as ZoneModel
-import uuid
+from backend.database.repository import ZoneRepository
 
 router = APIRouter()
+
+@router.get("/video-frame")
+def get_video_frame(
+    camera_id: str = Query("BAI-KIEM", description="Mã camera cần lấy frame nền"),
+    timestamp: Optional[float] = Query(
+        None, ge=0.0, description="Mốc thời gian preview tính bằng giây"
+    ),
+    frame_index: Optional[int] = Query(
+        None, ge=0, description="Chỉ số frame preview, bắt đầu từ 0"
+    ),
+):
+    if timestamp is not None and frame_index is not None:
+        raise HTTPException(
+            status_code=422,
+            detail="Chỉ được truyền một trong timestamp hoặc frame_index.",
+        )
+    video_path = resolve_video_path(camera_id)
+    try:
+        extracted = extract_jpeg_frame(
+            video_path,
+            timestamp_seconds=timestamp,
+            frame_index=frame_index,
+        )
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    headers = {
+        "X-Video-Source": quote(extracted.source_name),
+        "X-Video-Fps": f"{extracted.fps:g}",
+        "X-Video-Frame-Count": str(extracted.total_frames),
+        "X-Frame-Index": str(extracted.actual_frame_index),
+        "X-Frame-Timestamp": f"{extracted.actual_timestamp_seconds:.6f}",
+    }
+    return Response(
+        content=extracted.jpeg_bytes,
+        media_type="image/jpeg",
+        headers=headers,
+    )
 
 class Point2D(BaseModel):
     x: float
