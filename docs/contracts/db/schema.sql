@@ -170,12 +170,3 @@ VALUES
     ('zK1', 'BAI-KIEM', 'Zone bãi kiểm', '[{"x":54,"y":52},{"x":88,"y":58},{"x":92,"y":90},{"x":48,"y":92}]', '["container","forklift","truck","crane"]', '["car","motorbike","bicycle","person"]', '#30d158'),
     ('zK2', 'BAI-KIEM', 'Zone làn di chuyển', '[{"x":38,"y":42},{"x":52,"y":42},{"x":46,"y":94},{"x":8,"y":94}]', '["container","forklift","truck"]', '["car","motorbike","bicycle","person"]', '#ff9f0a'),
     ('zK3', 'BAI-KIEM', 'Zone cấm PT cá nhân', '[{"x":6,"y":30},{"x":34,"y":28},{"x":36,"y":60},{"x":4,"y":66}]', '["container"]', '["car","motorbike","bicycle","person"]', '#ff453a');
-
-INSERT OR IGNORE INTO events (id, timestamp, camera_id, zone_id, event_type, severity_level, license_plate, object_class, confidence, crop_image_url, video_clip_url)
-VALUES
-    ('evt-bk-01', datetime('now', '-5 minutes'), 'BAI-KIEM', 'zK3', 'ZONE_VIOLATION', 3, NULL, 'Xe máy', 0.96, '/media/crops/crop_01.jpg', '/videos/BAI_KIEM.mp4'),
-    ('evt-bk-02', datetime('now', '-20 minutes'), 'BAI-KIEM', 'zK1', 'ZONE_VIOLATION', 1, 'FL-02', 'Xe nâng FL-02', 0.98, '/media/crops/crop_02.jpg', '/videos/BAI_KIEM.mp4'),
-    ('evt-bk-03', datetime('now', '-45 minutes'), 'BAI-KIEM', 'zK1', 'ZONE_VIOLATION', 1, '15R-158.45', 'Xe container 15R-158.45', 0.99, '/media/crops/crop_03.jpg', '/videos/BAI_KIEM.mp4'),
-    ('evt-bk-04', datetime('now', '-1 hour'), 'BAI-KIEM', 'zK1', 'ZONE_VIOLATION', 3, NULL, 'Xe hơi trắng', 0.92, '/media/crops/crop_04.jpg', '/videos/BAI_KIEM.mp4'),
-    ('evt-bk-05', datetime('now', '-2 hours'), 'BAI-KIEM', 'zK1', 'ZONE_VIOLATION', 1, 'FL-01', 'Xe nâng FL-01', 0.97, '/media/crops/crop_05.jpg', '/videos/BAI_KIEM.mp4');
-

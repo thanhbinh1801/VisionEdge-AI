@@ -1,6 +1,6 @@
-import os
 import logging
-from typing import List, Tuple, Dict, Any, Union
+import os
+from typing import Any, Dict, List, Tuple, Union
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +39,47 @@ COCO_TO_CANONICAL = {
     "bench": "forklift"
 }
 
+# Rich Open-Vocabulary Prompts for Port & Industrial Yard Equipment (CR-001)
+RICH_CLASS_PROMPTS = [
+    "shipping container", "freight container", "container",
+    "container truck", "heavy cargo truck", "semi truck", "truck",
+    "blue reach stacker", "container reach stacker", "reach stacker", "container handler", "heavy forklift", "forklift",
+    "mobile crane truck", "container crane", "port crane", "gantry crane", "crane",
+    "car", "automobile", "pickup truck",
+    "motorbike", "motorcycle", "scooter",
+    "bicycle", "bike",
+    "person", "worker", "pedestrian",
+    "light pole", "lamp post", "utility pole"
+]
+
+PROMPT_TO_CANONICAL = {
+    "shipping container": "container",
+    "freight container": "container",
+    "container truck": "truck",
+    "heavy cargo truck": "truck",
+    "semi truck": "truck",
+    "blue reach stacker": "forklift",
+    "container reach stacker": "forklift",
+    "reach stacker": "forklift",
+    "container handler": "forklift",
+    "heavy forklift": "forklift",
+    "mobile crane truck": "forklift",
+    "container crane": "crane",
+    "port crane": "crane",
+    "gantry crane": "crane",
+    "crane": "crane",
+    "automobile": "car",
+    "pickup truck": "car",
+    "motorcycle": "motorbike",
+    "scooter": "motorbike",
+    "bike": "bicycle",
+    "worker": "person",
+    "pedestrian": "person",
+    "light pole": "IGNORE",
+    "lamp post": "IGNORE",
+    "utility pole": "IGNORE"
+}
+
 class AIVisionPipeline:
     """
     Ultralytics YOLO-World v2 Engine & Ray-Casting Point-in-Polygon Evaluator.
@@ -50,7 +91,7 @@ class AIVisionPipeline:
         self.model_name_or_path = model_name_or_path
         self.model = None
         self.model_type = "yolo-world"
-        self.classes = list(CANONICAL_8_OBJECT_CLASSES)
+        self.classes = list(RICH_CLASS_PROMPTS)
         self._initialize_model()
 
     def _resolve_model_path(self) -> str:
@@ -80,7 +121,7 @@ class AIVisionPipeline:
                 self.model = YOLOWorld(model_source)
                 self.model.set_classes(self.classes)
                 self.model_type = "yolo-world"
-                logger.info(f"Loaded YOLO-World v2 model from: {model_source}")
+                logger.info(f"Loaded YOLO-World v2 model with rich prompts from: {model_source}")
                 return
         except Exception as e:
             logger.warning(f"YOLO-World load error: {e}")
@@ -165,30 +206,49 @@ class AIVisionPipeline:
         bbox: Tuple[float, float, float, float],
         polygon_points: List[Any]
     ) -> bool:
-        xmin, ymin, xmax, ymax = bbox
-        cx = (xmin + xmax) / 2.0
-        cy = (ymin + ymax) / 2.0
+        b0, b1, b2, b3 = bbox
+        # If b2 > b0 and b3 > b1, format is (xmin, ymin, xmax, ymax)
+        if b2 > b0 and b3 > b1:
+            cx = (b0 + b2) / 2.0
+            cy = (b1 + b3) / 2.0
+        else:
+            # Format is (left, top, width, height)
+            cx = b0 + b2 / 2.0
+            cy = b1 + b3 / 2.0
         return self.point_in_polygon((cx, cy), polygon_points)
 
-    def process_frame(self, frame_matrix, zones: List[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    def process_frame(self, frame_matrix, zones: List[Dict[str, Any]] = None, conf_threshold: float = 0.50) -> List[Dict[str, Any]]:
         """
         Runs YOLO inference on frame matrix and evaluates Ray-Casting PIP zone violations.
+        Filters out detections below specified confidence threshold.
         """
         detections = []
         if self.model is not None and frame_matrix is not None:
             try:
-                results = self.model.predict(frame_matrix, conf=0.10, verbose=False)
+                results = self.model.predict(frame_matrix, conf=conf_threshold, verbose=False)
                 for r in results:
                     boxes = r.boxes
                     for box in boxes:
+                        conf = float(box.conf[0])
+                        if conf < conf_threshold:
+                            continue
+
                         cls_id = int(box.cls[0])
                         raw_cls_name = r.names[cls_id] if hasattr(r, "names") and cls_id in r.names else "person"
-                        cls_name = COCO_TO_CANONICAL.get(raw_cls_name.lower(), raw_cls_name.lower())
+                        raw_cls_lower = raw_cls_name.lower()
+                        cls_name = PROMPT_TO_CANONICAL.get(raw_cls_lower, COCO_TO_CANONICAL.get(raw_cls_lower, raw_cls_lower))
+                        if cls_name == "IGNORE":
+                            continue
                         
                         if cls_name not in CANONICAL_8_OBJECT_CLASSES:
-                            cls_name = "container" if raw_cls_name.lower() in ("train", "box") else "person"
-
-                        conf = float(box.conf[0])
+                            if raw_cls_lower in ("train", "box", "shipping container", "freight container"):
+                                cls_name = "container"
+                            elif raw_cls_lower in ("reach stacker", "container handler", "blue reach stacker", "container reach stacker", "mobile crane truck", "bench", "loader"):
+                                cls_name = "forklift"
+                            elif raw_cls_lower in ("bus", "heavy truck", "cargo truck", "heavy cargo truck", "semi truck"):
+                                cls_name = "truck"
+                            else:
+                                continue  # Skip unmapped non-canonical noise objects instead of forcing to person
                         xyxy = box.xyxy[0].tolist()
 
                         h, w = frame_matrix.shape[:2]
@@ -202,6 +262,10 @@ class AIVisionPipeline:
                             round(((xyxy[3] - xyxy[1]) / h) * 100.0, 1)
                         ]
 
+                        # Suppress ultra-thin vertical false positives for crane (e.g. light poles width < 2.5%)
+                        if cls_name == "crane" and pct_bbox[2] < 2.5:
+                            continue
+
                         detection = {
                             "object_class": cls_name,
                             "vietnamese_name": OBJECT_VIETNAMESE_NAMES.get(cls_name, cls_name),
@@ -210,6 +274,7 @@ class AIVisionPipeline:
                             "severity": 1,
                             "zone_violation": False,
                             "zone_name": None,
+                            "zone_id": None,
                         }
 
                         if zones:
@@ -224,9 +289,11 @@ class AIVisionPipeline:
                                         detection["zone_violation"] = True
                                         detection["severity"] = zone.get("severity", 3)
                                         detection["zone_name"] = zone.get("name", "Vùng Cấm")
+                                        detection["zone_id"] = zone.get("id")
                                         break
                                     else:
                                         detection["zone_name"] = zone.get("name", "Zone An Toàn")
+                                        detection["zone_id"] = zone.get("id")
 
                         detections.append(detection)
             except Exception as e:

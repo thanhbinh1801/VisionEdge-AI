@@ -1,9 +1,13 @@
 import React from 'react';
 import { useApp } from '../../context/AppContext';
 
-export const PolygonZoneEditor: React.FC = () => {
+interface PolygonZoneEditorProps {
+  cameraId: string;
+}
+
+export const PolygonZoneEditor: React.FC<PolygonZoneEditorProps> = ({ cameraId }) => {
   const { zonesByCam, toggleZoneType, objLabels } = useApp();
-  const zones = zonesByCam['BAI-KIEM'] || [];
+  const zones = zonesByCam[cameraId] || [];
 
   return (
     <div
@@ -15,7 +19,7 @@ export const PolygonZoneEditor: React.FC = () => {
       }}
     >
       <div style={{ fontSize: '13.5px', fontWeight: 600, marginBottom: '12px' }}>
-        Danh Sách Zone Đa Giác (Bãi Kiểm)
+        Danh Sách Zone Đa Giác ({cameraId === 'GATE-01' ? 'Cổng vào' : 'Bãi Kiểm'})
       </div>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
@@ -40,7 +44,7 @@ export const PolygonZoneEditor: React.FC = () => {
                 return (
                   <button
                     key={o.id}
-                    onClick={() => toggleZoneType('BAI-KIEM', z.id, o.name)}
+                    onClick={() => toggleZoneType(cameraId, z.id, o.name)}
                     style={{
                       fontSize: '11px',
                       fontWeight: 600,

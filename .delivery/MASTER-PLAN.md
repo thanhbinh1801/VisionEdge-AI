@@ -1,26 +1,62 @@
 ---
 artifact: MASTER-PLAN.md
-version: 1.9.0
+version: 2.0.1
 owner: plan-delivery
 status: approved
-updated_at: "2026-08-19T14:25:00+07:00"
+updated_at: "2026-08-20T20:35:00+07:00"
 depends_on: REQUIREMENTS.md, ARCHITECTURE.md, TECHNICAL-RISKS.md, ADR-001-monolithic-python-fastapi.md, ADR-002-point-in-polygon-zone-evaluation.md, ADR-003-event-cooldown-deduplication.md, ADR-004-llm-text-to-sql-with-fallback.md, ADR-005-Custom-Label-Matching-Architecture.md
 ---
 
 Delivery scope: change-request
 
-# Kế hoạch Triển khai Dự án Giám sát Camera AI (SentriAI Mini) - CR-001 & CR-002
+# Kế hoạch Triển khai Dự án Giám sát Camera AI (SentriAI Mini) - CR-001, CR-002 & CR-003
 
-## 1. Tổng quan Chiến lược Triển khai CR-001 & CR-002
+## 1. Tổng quan Chiến lược Triển khai
+
+Phạm vi master plan hiện tại bao phủ 3 change request:
+- `CR-001`: luồng giám sát cổng/khu vực, zone rules, whitelist/dataset nền tảng.
+- `CR-002`: hoàn thiện UI dùng chung, alert flows, chatbot và nghiệm thu tích hợp.
+- `CR-003`: tách `Area Zone Monitoring` thành `video stream lane`, `realtime metadata lane`, `event/alert lane`, đồng thời đưa zone rules vào cache in-memory để loại DB khỏi hot path mỗi frame.
 
 Hệ thống được tổ chức theo 3 Phase chính:
 - **Phase 1: Project Initialization & Global Foundation Design**: Khởi tạo khung dự án (Backend & Frontend Scaffold), thiết kế hợp đồng toàn cục `API-FOUNDATION.md`, `DATABASE-DESIGN.md` và `UI-UX-FOUNDATION.md`.
 - **Phase 2: Core Data Layer, Engines & Shared Components**: Phát triển CSDL SQLite (Xe quen/Xe lạ, Polygon zone rules, Custom BBox dataset samples), Core AI Engine (8 nhóm phương tiện/người, Point-in-Polygon, Cooldown) và bộ Shared Components.
-- **Phase 3: Module Implementation & System Integration**: Triển khai 4 Trang/Tab chính (Gate Dashboard LPR, Area Security Dashboard, Zone & Tag Settings với SVG Canvas 4 thao tác & BBox dataset tool, AI Chatbot Assistant với clip 10s bằng chứng).
+- **Phase 3: Module Implementation & System Integration**: Triển khai 4 Trang/Tab chính (Gate Dashboard LPR, Area Security Dashboard, Zone & Tag Settings với SVG Canvas 4 thao tác & BBox dataset tool, AI Chatbot Assistant với clip 10s bằng chứng), sau đó bổ sung refactor realtime area metadata cho `CR-003` và verification liên quan.
+
+## 2. Tổng quan Task Inventory
+
+- Tổng số task hiện có trong master plan: `18`
+- Dải task hiện dùng: `TASK-001` đến `TASK-019`, trừ `TASK-011` hiện chưa được cấp phát
+- Nhóm foundation/design: `TASK-001` đến `TASK-005`, `TASK-016`
+- Nhóm implementation: `TASK-006` đến `TASK-010`, `TASK-012` đến `TASK-014`, `TASK-017`, `TASK-018`
+- Nhóm verification/diagnosis: `TASK-015`, `TASK-019`
+
+### Danh sách task hiện hữu
+
+| Task | Capability | Mục tiêu ngắn |
+|---|---|---|
+| `TASK-001` | `backend-implementation` | Benchmark mô hình AI và chọn stack nhận diện |
+| `TASK-002` | `api-foundation-design` | Thiết kế API foundation toàn cục |
+| `TASK-003` | `database-design` | Thiết kế database/schema foundation |
+| `TASK-004` | `ui-ux-foundation-design` | Thiết kế UI/UX foundation |
+| `TASK-005` | `ui-ux-foundation-design` | Khởi tạo scaffold backend/frontend |
+| `TASK-006` | `backend-implementation` | Triển khai SQLite và data access layer |
+| `TASK-007` | `backend-implementation` | Triển khai core AI engine và custom hooks |
+| `TASK-008` | `frontend-implementation` | Phát triển shared UI components |
+| `TASK-009` | `frontend-implementation` | Gate Dashboard |
+| `TASK-010` | `frontend-implementation` | Area Security Dashboard baseline |
+| `TASK-012` | `frontend-implementation` | Zone & Tag Settings |
+| `TASK-013` | `frontend-implementation` | AI Chatbot Assistant |
+| `TASK-014` | `frontend-implementation` | Realtime alerts và multi-channel dispatch |
+| `TASK-015` | `verify-feature` | E2E và nghiệm thu toàn hệ thống baseline |
+| `TASK-016` | `api-design` | Thiết kế contract realtime metadata cho area monitoring |
+| `TASK-017` | `backend-implementation` | Backend area metadata lane và zone cache |
+| `TASK-018` | `frontend-implementation` | Frontend area dashboard consume metadata lane riêng |
+| `TASK-019` | `verify-feature` | Verification cho CR-003 realtime area metadata |
 
 ---
 
-## 2. Các Giai đoạn Triển khai (Phases & Task Graph)
+## 3. Các Giai đoạn Triển khai (Phases & Task Graph)
 
 ## Phase 1 — Project Initialization & Global Foundation Design
 
@@ -277,19 +313,90 @@ Hệ thống được tổ chức theo 3 Phase chính:
 - Wave: 3
 - Status: ready
 
+### Wave 4 (CR-003 Area Metadata Refactor)
+
+#### TASK-016 Thiết kế Contract Realtime Metadata cho Area Monitoring
+- Task type: design
+- Scope: feature
+- Module: api-gateway
+- Linked requirements: REQ-002, REQ-004, REQ-005, REQ-009, CR-003
+- Capability: api-design
+- Dependencies: TASK-010, TASK-014
+- Inputs: .delivery/REQUIREMENTS.md, .delivery/ARCHITECTURE.md, .delivery/API-CONTRACT.md, docs/contracts/api/api-schema.json, docs/contracts/api/websocket-events.json
+- Outputs: .delivery/tasks/TASK-016/API-CONTRACT.md, .delivery/tasks/TASK-016/TASK-RESULT.md
+- Completion gate: Xác định được contract metadata lane tách biệt với event lane, payload schema, versioning zone cache, và kỳ vọng tương thích ngược.
+- Verification method: python D:\Skill\SKILLs\design-api\scripts\validate_api_design.py D:\Hilab\Project34 TASK-016 --scope feature
+- Parallelizable: yes
+- Write scope: .delivery/tasks/TASK-016/
+- Wave: 4
+- Status: completed
+
+#### TASK-017 Backend Area Metadata Lane và Zone Cache
+- Task type: implementation
+- Scope: feature
+- Module: ai-vision-pipeline
+- Linked requirements: REQ-002, REQ-004, REQ-005, REQ-009, CR-003
+- Capability: backend-implementation
+- Dependencies: TASK-016
+- Inputs: .delivery/ARCHITECTURE.md, .delivery/tasks/TASK-016/API-CONTRACT.md, backend/app/api/v1/events.py, backend/app/api/v1/zones.py, backend/app/api/v1/websocket.py, backend/app/services/video_stream.py, backend/app/services/vision_pipeline.py, backend/database/repository.py
+- Outputs: backend/app/services/zone_cache.py, backend/app/services/area_metadata.py, backend runtime updates under backend/app/api/v1/ and backend/app/services/, backend tests, .delivery/tasks/TASK-017/TASK-RESULT.md
+- Completion gate: Frame loop area monitoring không đọc DB mỗi frame; zone rules được lấy từ in-memory cache theo `camera_id`; metadata realtime và event persistence được tách lane rõ ràng.
+- Verification method: python -m pytest backend/tests/test_area_metadata_runtime.py backend/tests/test_live_detections_event.py backend/tests/test_gate_zones.py -q
+- Parallelizable: yes
+- Write scope: backend/app/, backend/tests/, .delivery/tasks/TASK-017/
+- Wave: 4
+- Status: completed with follow-up bug
+
+#### TASK-018 Frontend Area Dashboard consume Realtime Metadata Riêng
+- Task type: implementation
+- Scope: feature
+- Module: web-ui
+- Linked requirements: REQ-002, REQ-005, REQ-009, CR-003
+- Capability: frontend-implementation
+- Dependencies: TASK-016, TASK-017
+- Inputs: .delivery/tasks/TASK-016/API-CONTRACT.md, .delivery/tasks/TASK-017/TASK-RESULT.md, frontend/src/pages/AreaSecurityDashboard.tsx, frontend/src/services/api.ts, frontend/src/services/websocket.ts, frontend/src/hooks/useWebSocket.ts, frontend/src/types/index.ts, frontend/src/context/AppContext.tsx
+- Outputs: frontend metadata-lane integration updates under frontend/src/, production verification evidence, .delivery/tasks/TASK-018/TASK-RESULT.md
+- Completion gate: UI area monitoring không cần polling detections/events để cập nhật metadata mỗi frame; video stream renderer vẫn là lane tách biệt.
+- Verification method: npm --prefix frontend run lint && npx --prefix frontend tsc --noEmit
+- Parallelizable: yes
+- Write scope: frontend/src/, .delivery/tasks/TASK-018/
+- Wave: 4
+- Status: completed
+
+### Wave 5 (CR-003 Verification & Bug Follow-up)
+
+#### TASK-019 Verification cho CR-003 Realtime Area Metadata
+- Task type: verification
+- Scope: feature
+- Module: none
+- Linked requirements: REQ-002, REQ-004, REQ-005, REQ-009, CR-003
+- Capability: verify-feature
+- Dependencies: TASK-016, TASK-017, TASK-018
+- Inputs: .delivery/tasks/TASK-016/API-CONTRACT.md, .delivery/tasks/TASK-017/TASK-RESULT.md, .delivery/tasks/TASK-018/TASK-RESULT.md, backend/frontend implementation under backend/app/ and frontend/src/
+- Outputs: .delivery/tasks/TASK-019/TEST-REPORT.md, .delivery/tasks/TASK-019/TASK-RESULT.md, bug records if verification fails
+- Completion gate: Xác minh area metadata stream cập nhật realtime, hot path không đọc DB mỗi frame, và compatibility với event/alert flows được giữ vững.
+- Verification method: python D:\Skill\SKILLs\verify-feature\scripts\validate_feature_verification.py D:\Hilab\Project34 TASK-019
+- Parallelizable: no
+- Write scope: .delivery/tasks/TASK-019/
+- Wave: 5
+- Status: failed with bug records
+
+
 ---
 
-## 3. Bản đồ Bao phủ Yêu cầu (Coverage Map)
+## 4. Bản đồ Bao phủ Yêu cầu (Coverage Map)
 
 ## Coverage Map
 - REQ-001 -> TASK-001, TASK-002, TASK-003, TASK-004, TASK-005, TASK-006, TASK-009, TASK-015
 - REQ-002 -> TASK-001, TASK-002, TASK-003, TASK-004, TASK-005, TASK-010, TASK-015
+- REQ-002 -> TASK-001, TASK-002, TASK-003, TASK-004, TASK-005, TASK-010, TASK-015, TASK-016, TASK-017, TASK-018, TASK-019
 - REQ-003 -> TASK-002, TASK-004, TASK-008, TASK-014, TASK-015
-- REQ-004 -> TASK-007, TASK-015
-- REQ-005 -> TASK-002, TASK-004, TASK-005, TASK-012, TASK-015
+- REQ-004 -> TASK-007, TASK-015, TASK-016, TASK-017, TASK-019
+- REQ-005 -> TASK-002, TASK-004, TASK-005, TASK-012, TASK-015, TASK-016, TASK-017, TASK-018, TASK-019
 - REQ-006 -> TASK-003, TASK-006, TASK-012, TASK-015
 - REQ-007 -> TASK-007, TASK-012, TASK-015
 - REQ-008 -> TASK-002, TASK-013, TASK-015
-- REQ-009 -> TASK-002, TASK-008, TASK-014, TASK-015
+- REQ-009 -> TASK-002, TASK-008, TASK-014, TASK-015, TASK-016, TASK-017, TASK-018, TASK-019
 - CR-001 -> TASK-002, TASK-005, TASK-006, TASK-007, TASK-010, TASK-012, TASK-015
 - CR-002 -> TASK-001, TASK-002, TASK-003, TASK-004, TASK-005, TASK-006, TASK-007, TASK-008, TASK-009, TASK-010, TASK-012, TASK-013, TASK-014, TASK-015
+- CR-003 -> TASK-016, TASK-017, TASK-018, TASK-019

@@ -1,8 +1,8 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "title": "SentriAI Mini WebSocket Event Schemas (CR-001 & CR-002)",
+  "title": "SentriAI Mini WebSocket Event Schemas (CR-001, CR-002 & CR-003)",
   "description": "JSON Schema for real-time WebSocket events broadcasted to React Web UI Client Hooks",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "type": "object",
   "required": ["event_type", "timestamp", "payload"],
   "properties": {
@@ -11,6 +11,7 @@
       "enum": [
         "LPR_DETECTION_EVENT",
         "ZONE_VIOLATION_EVENT",
+        "AREA_FRAME_METADATA",
         "KPI_STATS_UPDATE",
         "ALERT_LEVEL_3_NOTIFICATION",
         "DATASET_SAMPLE_SYNC_EVENT"
@@ -24,6 +25,7 @@
       "oneOf": [
         { "$ref": "#/definitions/LprDetectionPayload" },
         { "$ref": "#/definitions/ZoneViolationPayload" },
+        { "$ref": "#/definitions/AreaFrameMetadataPayload" },
         { "$ref": "#/definitions/KpiStatsUpdatePayload" },
         { "$ref": "#/definitions/AlertLevel3Payload" },
         { "$ref": "#/definitions/DatasetSampleSyncPayload" }
@@ -69,6 +71,83 @@
         "severity_level": { "type": "integer", "enum": [1, 2, 3] },
         "crop_image_url": { "type": "string" },
         "video_clip_url": { "type": "string" }
+      }
+    },
+    "AreaFrameMetadataPayload": {
+      "type": "object",
+      "required": [
+        "camera_id",
+        "frame_id",
+        "captured_at",
+        "zone_version",
+        "stream_status",
+        "pipeline_latency_ms",
+        "objects",
+        "kpi_delta"
+      ],
+      "properties": {
+        "camera_id": { "type": "string", "enum": ["BAI-KIEM"] },
+        "frame_id": { "type": "string" },
+        "captured_at": { "type": "string", "format": "date-time" },
+        "zone_version": { "type": "integer", "minimum": 1 },
+        "stream_status": { "type": "string", "enum": ["online", "degraded", "offline"] },
+        "pipeline_latency_ms": { "type": "number", "minimum": 0 },
+        "objects": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["track_id", "object_class", "confidence", "bbox", "center_point", "zone_hits"],
+            "properties": {
+              "track_id": { "type": "string" },
+              "object_class": {
+                "type": "string",
+                "enum": ["container", "truck", "forklift", "crane", "car", "motorbike", "bicycle", "person"]
+              },
+              "confidence": { "type": "number", "minimum": 0, "maximum": 1.0 },
+              "bbox": {
+                "type": "array",
+                "items": { "type": "number" },
+                "minItems": 4,
+                "maxItems": 4
+              },
+              "center_point": {
+                "type": "object",
+                "required": ["x", "y"],
+                "properties": {
+                  "x": { "type": "number" },
+                  "y": { "type": "number" }
+                }
+              },
+              "zone_hits": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["zone_id", "zone_name", "rule_result"],
+                  "properties": {
+                    "zone_id": { "type": "string" },
+                    "zone_name": { "type": "string" },
+                    "rule_result": { "type": "string", "enum": ["allowed", "prohibited", "observed"] }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "kpi_delta": {
+          "type": "object",
+          "required": [
+            "area_active_objects",
+            "area_zone_violations",
+            "area_active_machinery",
+            "area_total_zones"
+          ],
+          "properties": {
+            "area_active_objects": { "type": "integer", "minimum": 0 },
+            "area_zone_violations": { "type": "integer", "minimum": 0 },
+            "area_active_machinery": { "type": "integer", "minimum": 0 },
+            "area_total_zones": { "type": "integer", "minimum": 0 }
+          }
+        }
       }
     },
     "KpiStatsUpdatePayload": {

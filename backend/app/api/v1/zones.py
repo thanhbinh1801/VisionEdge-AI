@@ -1,14 +1,60 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
-from typing import List, Optional, Any
+import uuid
 from datetime import datetime
+from typing import Any, List, Optional
+from urllib.parse import quote
+
+from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
+
+from app.services.frame_extractor import extract_jpeg_frame, resolve_video_path
+from backend.app.services.video_stream import get_camera_pipeline
+from backend.app.services.vision_pipeline import AIVisionPipeline
+from backend.app.services.zone_cache import zone_cache_service
 from backend.database.engine import get_db
-from backend.database.repository import ZoneRepository
 from backend.database.models import Zone as ZoneModel
-import uuid
+from backend.database.repository import ZoneRepository
 
 router = APIRouter()
+vision_pipeline = AIVisionPipeline()
+
+@router.get("/video-frame")
+def get_video_frame(
+    camera_id: str = Query("BAI-KIEM", description="Mã camera cần lấy frame nền"),
+    timestamp: Optional[float] = Query(
+        None, ge=0.0, description="Mốc thời gian preview tính bằng giây"
+    ),
+    frame_index: Optional[int] = Query(
+        None, ge=0, description="Chỉ số frame preview, bắt đầu từ 0"
+    ),
+):
+    if timestamp is not None and frame_index is not None:
+        raise HTTPException(
+            status_code=422,
+            detail="Chỉ được truyền một trong timestamp hoặc frame_index.",
+        )
+    video_path = resolve_video_path(camera_id)
+    try:
+        extracted = extract_jpeg_frame(
+            video_path,
+            timestamp_seconds=timestamp,
+            frame_index=frame_index,
+        )
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    headers = {
+        "X-Video-Source": quote(extracted.source_name),
+        "X-Video-Fps": f"{extracted.fps:g}",
+        "X-Video-Frame-Count": str(extracted.total_frames),
+        "X-Frame-Index": str(extracted.actual_frame_index),
+        "X-Frame-Timestamp": f"{extracted.actual_timestamp_seconds:.6f}",
+    }
+    return Response(
+        content=extracted.jpeg_bytes,
+        media_type="image/jpeg",
+        headers=headers,
+    )
 
 class Point2D(BaseModel):
     x: float
@@ -45,19 +91,82 @@ class ZoneResponse(BaseModel):
     class Config:
         from_attributes = True
 
-@router.get("", response_model=List[ZoneResponse])
+
+def _make_meta() -> dict[str, str]:
+    return {
+        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "request_id": f"req_{uuid.uuid4().hex[:12]}",
+    }
+
+
+def _serialize_zone(zone: ZoneModel, version: int) -> dict[str, Any]:
+    vertices = []
+    for point in zone.vertices or []:
+        if isinstance(point, dict):
+            vertices.append({"x": float(point.get("x", 0)), "y": float(point.get("y", 0))})
+        elif isinstance(point, (list, tuple)) and len(point) >= 2:
+            vertices.append({"x": float(point[0]), "y": float(point[1])})
+    return {
+        "id": zone.id,
+        "camera_id": zone.camera_id,
+        "name": zone.name,
+        "vertices": vertices,
+        "allowed_classes": list(zone.allowed_classes or []),
+        "forbidden_classes": list(zone.forbidden_classes or []),
+        "is_active": bool(zone.is_active),
+        "color": zone.color or "#EF4444",
+        "version": version,
+    }
+
+
+def _refresh_zone_runtime(db: Session, camera_id: str) -> dict[str, Any]:
+    try:
+        state = zone_cache_service.refresh_camera(db, camera_id)
+        pipeline = get_camera_pipeline(camera_id, vision_pipeline)
+        pipeline.update_zones(list(state.zones), state.zone_version)
+        return {
+            "camera_id": state.camera_id,
+            "zone_version": state.zone_version,
+            "cache_status": state.cache_status,
+            "refreshed_at": state.refreshed_at,
+        }
+    except Exception as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "ZONE_CACHE_REFRESH_FAILED",
+                "message": f"Zone persisted but runtime cache refresh failed for camera {camera_id}.",
+                "details": [{"field": "camera_id", "issue": str(exc)}],
+            },
+        ) from exc
+
+@router.get("")
 def get_zones(
     camera_id: Optional[str] = Query(None, description="Lọc theo mã camera (BAI-KIEM, GATE-01)"),
     db: Session = Depends(get_db)
 ):
     repo = ZoneRepository(db)
     if camera_id:
-        zones = repo.get_by_camera(camera_id)
-    else:
-        zones = repo.get_all()
-    return zones
+        state = zone_cache_service.get_or_load(db, camera_id)
+        zones = [repo.get_by_id(zone["id"]) for zone in state.zones]
+        items = [_serialize_zone(zone, state.zone_version) for zone in zones if zone is not None]
+        return {
+            "success": True,
+            "data": {
+                "items": items,
+                "cache": {
+                    "camera_id": state.camera_id,
+                    "zone_version": state.zone_version,
+                    "cache_status": state.cache_status,
+                    "refreshed_at": state.refreshed_at,
+                },
+            },
+            "error": None,
+            "meta": _make_meta(),
+        }
+    return repo.get_all()
 
-@router.post("", response_model=ZoneResponse)
+@router.post("")
 def create_zone(
     payload: ZoneCreateRequest,
     db: Session = Depends(get_db)
@@ -78,9 +187,18 @@ def create_zone(
     )
     repo = ZoneRepository(db)
     created = repo.create(new_zone)
-    return created
+    cache = _refresh_zone_runtime(db, created.camera_id)
+    return {
+        "success": True,
+        "data": {
+            "zone": _serialize_zone(created, cache["zone_version"]),
+            "cache": cache,
+        },
+        "error": None,
+        "meta": _make_meta(),
+    }
 
-@router.put("/{zone_id}", response_model=ZoneResponse)
+@router.put("/{zone_id}")
 def update_zone(
     zone_id: str,
     payload: ZoneUpdateRequest,
@@ -101,7 +219,16 @@ def update_zone(
     )
     if not updated:
         raise HTTPException(status_code=404, detail=f"Không tìm thấy zone có id: {zone_id}")
-    return updated
+    cache = _refresh_zone_runtime(db, updated.camera_id)
+    return {
+        "success": True,
+        "data": {
+            "zone": _serialize_zone(updated, cache["zone_version"]),
+            "cache": cache,
+        },
+        "error": None,
+        "meta": _make_meta(),
+    }
 
 @router.delete("/{zone_id}")
 def delete_zone(
@@ -109,7 +236,19 @@ def delete_zone(
     db: Session = Depends(get_db)
 ):
     repo = ZoneRepository(db)
+    zone = repo.get_by_id(zone_id)
+    if not zone:
+        raise HTTPException(status_code=404, detail=f"Không tìm thấy zone có id: {zone_id}")
     success = repo.delete(zone_id)
     if not success:
         raise HTTPException(status_code=404, detail=f"Không tìm thấy zone có id: {zone_id}")
-    return {"success": True, "message": f"Đã xóa zone {zone_id}"}
+    cache = _refresh_zone_runtime(db, zone.camera_id)
+    return {
+        "success": True,
+        "data": {
+            "zone": None,
+            "cache": cache,
+        },
+        "error": None,
+        "meta": _make_meta(),
+    }

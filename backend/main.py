@@ -1,5 +1,5 @@
-import sys
 import os
+import sys
 
 backend_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(backend_dir)
@@ -8,12 +8,12 @@ if backend_dir not in sys.path:
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
+from app.api.router import api_router, websocket_router
+from app.core.config import settings
+from app.core.logger import logger
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from app.core.config import settings
-from app.core.logger import logger
-from app.api.router import api_router
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -40,6 +40,7 @@ if os.path.exists(assets_dir):
     app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
 
 app.include_router(api_router, prefix=settings.API_V1_STR)
+app.include_router(websocket_router)
 
 @app.on_event("startup")
 def startup_event():
@@ -64,5 +65,11 @@ def health_check():
 
 if __name__ == "__main__":
     import uvicorn
+    reload_enabled = os.getenv("SENTRIAI_RELOAD", "").lower() in {"1", "true", "yes"}
     logger.info("Starting SentriAI Mini FastAPI Server on port 8000...")
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run(
+        "main:app" if reload_enabled else app,
+        host="0.0.0.0",
+        port=8000,
+        reload=reload_enabled,
+    )

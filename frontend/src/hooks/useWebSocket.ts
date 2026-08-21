@@ -1,22 +1,29 @@
 import { useEffect, useRef } from 'react';
-import { WebSocketClient } from '../services/websocket';
-import { EventRecord } from '../types';
+import { createAreaMetadataWebSocketClient, RealtimeEvent, WebSocketClient } from '../services/websocket';
 
-export function useWebSocket(onEventReceived?: (event: EventRecord) => void) {
+export function useWebSocket(
+  cameraId: string,
+  onEventReceived?: (event: RealtimeEvent) => void,
+) {
   const clientRef = useRef<WebSocketClient | null>(null);
+  const eventHandlerRef = useRef<typeof onEventReceived>(onEventReceived);
 
   useEffect(() => {
-    const client = new WebSocketClient();
+    eventHandlerRef.current = onEventReceived;
+  }, [onEventReceived]);
+
+  useEffect(() => {
+    const client = createAreaMetadataWebSocketClient(cameraId);
     client.connect();
     clientRef.current = client;
 
     const unsubscribe = client.subscribe((evt) => {
-      if (onEventReceived) onEventReceived(evt);
+      if (eventHandlerRef.current) eventHandlerRef.current(evt);
     });
 
     return () => {
       unsubscribe();
       client.disconnect();
     };
-  }, [onEventReceived]);
+  }, [cameraId]);
 }

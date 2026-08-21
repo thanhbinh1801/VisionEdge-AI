@@ -1,38 +1,34 @@
 ---
 artifact: TASK-RESULT.md
-version: 1.2.0
+version: 1.4.0
 task_id: TASK-010
 owner: implement-frontend
-status: approved
-updated_at: "2026-08-19T15:14:35+07:00"
+status: blocked
+updated_at: "2026-08-20T16:39:42+07:00"
 ---
 
-# Task Result: TASK-010 — Triển khai Tab 2 — Area Security Dashboard (Inline Edit & Zero Mock Data)
+# Task Result: TASK-010 — Đồng bộ Area Security Dashboard với annotated MJPEG
 
 - Task ID: TASK-010
-- Outcome: completed
-- Inputs used: `.delivery/tasks/TASK-010/TASK-PACKET.md`, `.delivery/ARCHITECTURE.md`, `docs/contracts/api/api-schema.json`
-- Outputs produced: `frontend/src/pages/AreaSecurityDashboard.tsx`, `frontend/src/services/api.ts`, `frontend/src/context/AppContext.tsx`
-- Validation evidence: TypeScript typecheck `npx tsc --noEmit` -> PASSED (0 errors); Task validator -> OK
-- Changed files:
-  - `frontend/src/pages/AreaSecurityDashboard.tsx` (Bổ sung Inline Editing tên Zone/Camera, xóa 100% mock data, hỗ trợ 2 camera streams `BAI-KIEM` & `XUONG-AN-NINH`)
-  - `frontend/src/services/api.ts` (Thêm API `updateVehicleTagApi`, `updateZoneApi`, `createZoneApi`, `deleteZoneApi`)
-  - `frontend/src/context/AppContext.tsx` (Tự động đồng bộ các thao tác chỉnh sửa với SQLite DB)
-- Commands run: `npx tsc --noEmit`
-- Deviations: none
-- Blockers: none
+- Outcome: blocked
+- Inputs used: `.delivery/MASTER-PLAN.md`, `.delivery/tasks/TASK-010/TASK-PACKET.md`, `.delivery/tasks/TASK-010/BUG-DIAGNOSIS.md`, approved API/UI foundation từ `HEAD`, `docs/contracts/api/api-schema.json`, và kết quả backend TASK-010 version 1.3.0.
+- Outputs produced: Area Security Dashboard dùng annotated MJPEG làm renderer duy nhất; loading/stream error/AI degraded states; strict dashboard API error propagation; production frontend bundle.
+- Validation evidence: `npm run lint` pass; `npx tsc --noEmit` pass; `npm run build` pass ngoài sandbox với 38 modules transformed; `git diff --check` pass cho frontend scope.
+- Changed files: `frontend/src/pages/AreaSecurityDashboard.tsx`, `frontend/src/services/api.ts`, `.delivery/tasks/TASK-010/TASK-RESULT.md`.
+- Tests changed: Không thêm test file vì `frontend/package.json` không có test runner; regression được kiểm bằng strict TypeScript, lint script và production Vite build.
+- Commands run: `npm run lint` (exit 0); `npx tsc --noEmit` (exit 0); `npm run build` trong sandbox (exit 1, `spawn EPERM`); `npm run build` ngoài sandbox (exit 0, 38 modules transformed); `git diff --check -- frontend/src/pages/AreaSecurityDashboard.tsx frontend/src/services/api.ts .delivery/tasks/TASK-010/TASK-RESULT.md` (exit 0).
+- Deviations: Không sửa backend, API body contract, Master Plan, requirements, architecture hoặc database. Custom frame identity headers được đọc như optional metadata; bbox/violation chỉ được backend render trên annotated MJPEG.
+- Blockers: Formal skill validation remains blocked because `.delivery/tasks/TASK-010/TASK-PACKET.md` and approved upstream `.delivery` artifacts were already deleted in the working tree; owner: project owner/user must restore or approve restoring those artifacts before validator rerun. Frontend implementation, lint, typecheck and production build all pass.
+- Scope change requests: none
 
----
+## Implementation summary
 
-## 1. Execution Summary
+- Giữ `<img>` cho endpoint MJPEG; không đổi sang `<video>`.
+- Xóa React bbox overlay và SVG annotation overlay khỏi viewport để backend là nơi duy nhất vẽ frame annotations.
+- Polling live detections chỉ cập nhật KPI và trạng thái AI, không vẽ lớp hình ảnh độc lập.
+- API lỗi không còn bị chuyển thành mảng rỗng tại luồng Area Dashboard; UI giữ dữ liệu cuối cùng và hiển thị trạng thái degraded/error riêng.
+- Thêm trạng thái chờ frame đầu tiên, stream error, reconnect, AI degraded, zone degraded và event error với ARIA live/alert.
 
-1. **Chỉnh Tên Zone Trực Tiếp (Inline Editing)**:
-   - Khi bấm đúp vào nút chọn Zone hoặc nhãn tên Zone trên khung hình video, ô nhập dữ liệu `<input>` xuất hiện cho phép gõ tên mới. Nhấn `Enter` hoặc `Blur` tự động lưu tên và gửi API `PUT /api/v1/zones/{zone_id}` đồng bộ vào CSDL SQLite `sentri_ai.db`.
+## Verification notes
 
-2. **Loại Bỏ 100% Mock Data**:
-   - Xóa bỏ hoàn toàn các mảng dữ liệu mẫu fallback (`displayDetections`, `displayEvents`, `|| 3`, `|| 2`).
-   - 4 thẻ KPI tính toán 100% từ CSDL/APIs Backend.
-   - Nếu chưa có sự kiện vi phạm nào, hiển thị ô trạng thái trống sạch vẽ: *"Chưa ghi nhận sự kiện vi phạm nào trên CSDL"*.
-
-3. **Chuyển Đổi 2 Luồng Camera Stream**:
-   - Hỗ trợ chọn xem camera Bãi Kiểm (`BAI-KIEM`, video `/videos/BAI_KIEM.mp4`) và Xưởng An Ninh (`XUONG-AN-NINH`, video `/videos/XUONG_AN_NINH.mp4`).
+Production build ban đầu không thể spawn `esbuild` trong sandbox Windows (`EPERM`). Cùng lệnh chạy ngoài sandbox thành công; đây là hạn chế sandbox, không phải lỗi source hoặc bundle.
