@@ -1,9 +1,9 @@
 ---
 artifact: ARCHITECTURE.md
-version: 1.1.0
+version: 1.2.0
 owner: design-architecture
 status: approved
-updated_at: "2026-08-19T11:03:43+07:00"
+updated_at: "2026-08-20T18:10:00+07:00"
 ---
 
 # Kiến trúc Kỹ thuật Hệ thống Giám sát Camera AI (SentriAI Mini)
@@ -18,7 +18,11 @@ graph TD
     API <-- Inter-module Calls --> VIS[ai-vision-pipeline: YOLOv26 & LPR Engine]
     API <-- Media Serving --> STOR[database-storage: SQLite & Local Disk]
     VIS <-- Frame Ingestion --> STRM[video-stream-service: OpenCV Capture]
+    VIS --> META[area-metadata-publisher: Realtime Snapshot Stream]
+    VIS --> CACHE[zone-cache: In-Memory by Camera]
     VIS --> EVT[event-clip-manager: Deduplication & Clip Slicer]
+    META --> API
+    CACHE --> VIS
     EVT --> ALT[alert-dispatcher: Real-time Beep & Telegram Bot]
     EVT --> STOR
     API <-- Query Engine --> QA[llm-qa-agent: Text-to-SQL Assistant]
@@ -44,6 +48,14 @@ graph TD
 ### `ai-vision-pipeline` — YOLO-World, YOLOv8 & LPR OCR Engine
 - **Trách nhiệm**: Chạy mô hình **Ultralytics YOLO-World v2** (`yolov8s-worldv2.pt`) cho Area Zone Monitoring (phát hiện linh hoạt Người, Xe nâng, Xe container, Máy móc...), YOLOv8 + EasyOCR/PaddleOCR cho biển số xe Cổng GATE-01, và đánh giá tâm BBox trong đa giác (Point-in-Polygon).
 - **Công nghệ**: Ultralytics YOLO-World v2, YOLOv8, PyTorch, OpenCV, EasyOCR / PaddleOCR, Shapely / Ray-Casting PIP.
+
+### `zone-cache` — In-memory Zone Rules Runtime
+- **Trách nhiệm**: Duy trì bản sao zone/rule đang hoạt động theo `camera_id` trong memory, phục vụ trực tiếp cho frame loop area monitoring; nhận refresh/invalidation sau CRUD zone từ control plane mà không yêu cầu DB read ở từng frame.
+- **Công nghệ**: Python in-memory map, async lock/atomic swap, cache versioning.
+
+### `area-metadata-publisher` — Realtime Area Snapshot Lane
+- **Trách nhiệm**: Chuyển kết quả nhận diện theo frame thành snapshot metadata ổn định cho UI khu vực, gồm object list, zone hit, zone version, stream status, latency và KPI feed gần realtime; tách biệt khỏi event persistence lane.
+- **Công nghệ**: FastAPI WebSocket broadcast, lightweight serializer, in-memory fan-out queue.
 
 ### `event-clip-manager` — Event & Clip Processor
 - **Trách nhiệm**: Lọc trượt trùng lặp (Cooldown 10-15s), phân loại mức độ cảnh báo (Mức 1/2/3), trích xuất và ghi file MP4 10s đính kèm bản ghi sự kiện vào DB.
@@ -112,6 +124,8 @@ frontend/
 |                                 PYTHON BACKEND RUNTIME                            |
 |  - API Gateway: FastAPI / Uvicorn Server (Async IO)                               |
 |  - AI Vision Pipeline: PyTorch / Ultralytics YOLOv26 / OpenCV / EasyOCR           |
+|  - Zone Cache Runtime: In-memory rules by camera_id                               |
+|  - Area Metadata Publisher: Realtime snapshot lane for Area Dashboard             |
 |  - Event & Clip Manager: 10s Ring Buffer Slicer + Cooldown Cache                  |
 |  - LLM Agent: LangChain / Direct LLM API + Fallback Rule Engine                   |
 |  - Storage Layer: SQLite3 Database & Local File System I/O                        |
@@ -127,6 +141,8 @@ sequenceDiagram
     autonumber
     participant Cam as Video Stream (OpenCV)
     participant AI as YOLOv26 AI Vision Pipeline
+    participant Cache as Zone Cache
+    participant Meta as Area Metadata Publisher
     participant EVT as Event Manager
     participant DB as SQLite DB & File Disk
     participant WS as WebSocket Gateway
@@ -134,8 +150,12 @@ sequenceDiagram
     participant TG as Telegram Bot
 
     Cam->>AI: Push Frame Matrix (1080p, 5-15 FPS)
+    Cache-->>AI: Active zones by camera_id (in-memory)
     AI->>AI: YOLOv26 Object Detect & LPR OCR
     AI->>AI: Point-in-Polygon Check (Zone)
+    AI->>Meta: Publish Area Snapshot (objects, zone_hits, latency, zone_version)
+    Meta->>WS: Broadcast metadata lane to Area Dashboard
+    WS->>UI: Update overlay/KPI without polling event history
     alt Có đối tượng vi phạm / qua làn cổng
         AI->>EVT: Trigger Raw Event (Camera, Zone, BBox, Plate, Class)
         EVT->>EVT: Check Cooldown Window (10-15s)
@@ -149,6 +169,8 @@ sequenceDiagram
             end
         end
     end
+
+Note over AI,DB: DB khong nam trong hot path moi frame cua Area Monitoring; DB chi tham gia control plane va persistence lane.
 ```
 
 ---
@@ -162,6 +184,7 @@ Các quyết định kiến trúc:
 - [ADR-004: Kiến trúc Hỏi đáp AI Text-to-SQL kết hợp Fallback Rule-based Engine](file:///d:/Hilab/Project34/.delivery/ADR/ADR-004-llm-text-to-sql-with-fallback.md)
 - **CR-002 Audit**: Đổi stack phân hệ `web-ui` từ Vanilla JS sang React Framework (Vite/Next.js + Tailwind CSS + Lucide Icons + Recharts + SVG Canvas) và nâng cấp model `ai-vision-pipeline` sang Ultralytics YOLOv26.
 - **CR-003 Audit**: Cập nhật mô hình phân hệ Area Zone Monitoring sang **Ultralytics YOLO-World v2** (`yolov8s-worldv2.pt` Open-Vocabulary Detection) kết hợp 2 luồng Video Stream (`BAI-KIEM.mp4` 10s & `XUONG-AN-NINH.mp4` 4m32s), giữ nguyên YOLOv8 + EasyOCR cho Gate LPR Monitoring (`GATE-01`).
+- **CR-003 (Change Request) Audit**: Bổ sung `area-metadata-publisher` và `zone-cache` để tách `video stream lane`, `realtime metadata lane`, `event/alert lane`; cấm DB read trong hot path xử lý từng frame của Area Dashboard.
 
 ---
 
@@ -170,11 +193,11 @@ Các quyết định kiến trúc:
 | Requirement ID | Module sở hữu (Module ID) | Thành phần Xử lý chính | Quyết định Kiến trúc liên quan |
 |---|---|---|---|
 | **REQ-001** (LPR Gate) | `video-stream-service`, `ai-vision-pipeline`, `web-ui` | OpenCV Capture + YOLOv26 + OCR + Recharts KPI | ADR-001, CR-002 |
-| **REQ-002** (Area Zone) | `ai-vision-pipeline`, `event-clip-manager`, `web-ui` | YOLOv26 + Shapely Point-in-Polygon + Recharts | ADR-001, ADR-002, CR-002 |
+| **REQ-002** (Area Zone) | `ai-vision-pipeline`, `area-metadata-publisher`, `event-clip-manager`, `web-ui` | YOLOv26 + Shapely Point-in-Polygon + Realtime Metadata Stream + Recharts | ADR-001, ADR-002, CR-002, CR-003 |
 | **REQ-003** (Severity Class) | `event-clip-manager`, `alert-dispatcher`, `web-ui` | Severity Evaluator + React Badge State | ADR-001, CR-002 |
-| **REQ-004** (Deduplication) | `event-clip-manager`, `web-ui` | In-Memory Sliding Window Cooldown Cache + React Hook | ADR-003, CR-002 |
-| **REQ-005** (Polygon Zone UI) | `web-ui`, `api-gateway` | React SVG Canvas Interactive Draw + API Zone Route | ADR-002, CR-002 |
+| **REQ-004** (Deduplication) | `event-clip-manager`, `area-metadata-publisher`, `web-ui` | In-Memory Sliding Window Cooldown Cache + Metadata/Event Lane Split | ADR-003, CR-002, CR-003 |
+| **REQ-005** (Polygon Zone UI) | `web-ui`, `api-gateway`, `zone-cache` | React SVG Canvas Interactive Draw + API Zone Route + Cache Invalidation | ADR-002, CR-002, CR-003 |
 | **REQ-006** (Vehicle Tag) | `api-gateway`, `database-storage`, `web-ui` | React Data Table + Whitelist/Blacklist API | ADR-001, CR-002 |
 | **REQ-007** (Custom Label Tool) | `web-ui`, `api-gateway`, `ai-vision-pipeline` | Timeline Scrubber + YOLOv26 Custom Dataset Manager | ADR-001, CR-002 |
 | **REQ-008** (AI Assistant Q&A) | `llm-qa-agent`, `database-storage`, `web-ui` | Text-to-SQL + Fallback Engine + React VideoModal 10s | ADR-004, CR-002 |
-| **REQ-009** (Multi-channel Alert) | `alert-dispatcher`, `web-ui` | React AudioBeepPlayer (Web Audio) + Telegram Bot | ADR-001, CR-002 |
+| **REQ-009** (Multi-channel Alert) | `event-clip-manager`, `alert-dispatcher`, `web-ui` | Derived Level-3 Alert Lane + React AudioBeepPlayer + Telegram Bot | ADR-001, CR-002, CR-003 |

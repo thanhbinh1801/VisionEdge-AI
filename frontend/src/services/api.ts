@@ -1,4 +1,4 @@
-import { EventRecord, ZoneConfig, VehicleTag, KpiData } from '../types';
+import { EventRecord, KpiData, ZoneCacheInfo, ZoneConfig, VehicleTag } from '../types';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api/v1';
 
@@ -18,6 +18,19 @@ export interface LiveDetectionSnapshot {
   detections: LiveDetection[];
   frameId?: string;
   frameTimestamp?: string;
+}
+
+interface ZoneWriteEnvelopeSuccess {
+  success: true;
+  data: {
+    zone: any | null;
+    cache: ZoneCacheInfo;
+  };
+  error: null;
+  meta: {
+    timestamp: string;
+    request_id: string;
+  };
 }
 
 export interface VideoFrameMetadata {
@@ -68,24 +81,38 @@ function buildTypesMap(allowedClasses: string[] = []): Record<string, number> {
   return acc;
 }
 
+function mapZone(z: any): ZoneConfig {
+  return {
+    id: z.id,
+    name: z.name,
+    camera_id: z.camera_id,
+    color: z.color || '#EF4444',
+    points: Array.isArray(z.vertices)
+      ? z.vertices.map((pt: any) => (Array.isArray(pt) ? pt : [pt.x, pt.y]))
+      : [],
+    types: buildTypesMap(z.allowed_classes),
+    allowed_classes: z.allowed_classes || [],
+    forbidden_classes: z.forbidden_classes || [],
+  };
+}
+
+function unwrapZonesPayload(data: any): ZoneConfig[] {
+  if (Array.isArray(data)) {
+    return data.map(mapZone);
+  }
+  if (data && data.success === true && data.data && Array.isArray(data.data.items)) {
+    return data.data.items.map(mapZone);
+  }
+  return [];
+}
+
 export async function fetchZones(cameraId?: string): Promise<ZoneConfig[]> {
   try {
     const url = cameraId ? `${API_BASE_URL}/zones?camera_id=${cameraId}` : `${API_BASE_URL}/zones`;
     const res = await fetch(url);
     if (!res.ok) throw new Error(`HTTP error ${res.status}`);
     const data = await res.json();
-    return data.map((z: any) => ({
-      id: z.id,
-      name: z.name,
-      camera_id: z.camera_id,
-      color: z.color || '#EF4444',
-      points: Array.isArray(z.vertices) 
-        ? z.vertices.map((pt: any) => (Array.isArray(pt) ? pt : [pt.x, pt.y])) 
-        : [],
-      types: buildTypesMap(z.allowed_classes),
-      allowed_classes: z.allowed_classes || [],
-      forbidden_classes: z.forbidden_classes || []
-    }));
+    return unwrapZonesPayload(data);
   } catch {
     return [];
   }
@@ -98,18 +125,7 @@ export async function fetchZonesStrict(cameraId?: string): Promise<ZoneConfig[]>
   const res = await fetch(url);
   if (!res.ok) throw new Error(`Không thể tải cấu hình zone (HTTP ${res.status})`);
   const data = await res.json();
-  return data.map((z: any) => ({
-    id: z.id,
-    name: z.name,
-    camera_id: z.camera_id,
-    color: z.color || '#EF4444',
-    points: Array.isArray(z.vertices)
-      ? z.vertices.map((pt: any) => (Array.isArray(pt) ? pt : [pt.x, pt.y]))
-      : [],
-    types: buildTypesMap(z.allowed_classes),
-    allowed_classes: z.allowed_classes || [],
-    forbidden_classes: z.forbidden_classes || [],
-  }));
+  return unwrapZonesPayload(data);
 }
 
 export async function createZoneApi(zone: {
@@ -134,19 +150,9 @@ export async function createZoneApi(zone: {
       }),
     });
     if (!res.ok) throw new Error(`HTTP error ${res.status}`);
-    const z = await res.json();
-    return {
-      id: z.id,
-      name: z.name,
-      camera_id: z.camera_id,
-      color: z.color || '#30d158',
-      points: Array.isArray(z.vertices) 
-        ? z.vertices.map((pt: any) => (Array.isArray(pt) ? pt : [pt.x, pt.y])) 
-        : [],
-      types: buildTypesMap(z.allowed_classes),
-      allowed_classes: z.allowed_classes || [],
-      forbidden_classes: z.forbidden_classes || []
-    };
+    const payload = (await res.json()) as ZoneWriteEnvelopeSuccess;
+    if (!payload.data.zone) return null;
+    return mapZone(payload.data.zone);
   } catch {
     return null;
   }

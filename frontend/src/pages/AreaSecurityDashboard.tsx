@@ -1,13 +1,12 @@
 import React, { useState, useEffect } from 'react';
+import { useWebSocket } from '../hooks/useWebSocket';
 import { useApp } from '../context/AppContext';
 import {
   fetchLatestEvents,
-  fetchLiveDetections,
   fetchZonesStrict,
   getVideoFeedUrl,
-  LiveDetection,
 } from '../services/api';
-import { ZoneConfig, AreaEvent } from '../types';
+import { AreaEvent, AreaFrameMetadataEvent, AreaMetadataObject, ZoneConfig } from '../types';
 
 const CANONICAL_8_TYPES = [
   { key: 'container', label: 'Xe container' },
@@ -25,13 +24,23 @@ export const AreaSecurityDashboard: React.FC = () => {
   const activeCam = 'BAI-KIEM';
   const [zones, setZones] = useState<ZoneConfig[]>([]);
   const [activeZoneId, setActiveZoneId] = useState<string | null>(null);
-  const [liveDetections, setLiveDetections] = useState<LiveDetection[]>([]);
+  const [metadataObjects, setMetadataObjects] = useState<AreaMetadataObject[]>([]);
   const [events, setEvents] = useState<AreaEvent[]>([]);
   const [streamStatus, setStreamStatus] = useState<'loading' | 'live' | 'error'>('loading');
+  const [metadataStatus, setMetadataStatus] = useState<'connecting' | 'online' | 'degraded' | 'offline'>('connecting');
   const [streamAttempt, setStreamAttempt] = useState(0);
   const [aiError, setAiError] = useState<string | null>(null);
   const [eventsError, setEventsError] = useState<string | null>(null);
   const [zonesError, setZonesError] = useState<string | null>(null);
+  const [metadataClock, setMetadataClock] = useState<string | null>(null);
+  const [pipelineLatencyMs, setPipelineLatencyMs] = useState<number | null>(null);
+  const [zoneVersion, setZoneVersion] = useState<number | null>(null);
+  const [areaKpis, setAreaKpis] = useState([
+    { label: 'Đối tượng trong khu', value: '0', color: 'var(--ink)' },
+    { label: 'Vi phạm loại xe hôm nay', value: '0', color: 'var(--ink)' },
+    { label: 'Xe nâng / container hoạt động', value: '0', color: 'var(--ink)' },
+    { label: 'Zone khu vực', value: '0', color: 'var(--ink)' },
+  ]);
 
   // Inline editing state for Zone Name
   const [editingZoneId, setEditingZoneId] = useState<string | null>(null);
@@ -59,22 +68,31 @@ export const AreaSecurityDashboard: React.FC = () => {
 
   }, [zonesByCam]);
 
-  // Fetch live detections & events from backend API (No mock data fallback)
+  useWebSocket(activeCam, (event) => {
+    if (!('event_type' in event) || event.event_type !== 'AREA_FRAME_METADATA') return;
+    const metadataEvent = event as AreaFrameMetadataEvent;
+    const payload = metadataEvent.payload;
+    setMetadataObjects(payload.objects);
+    setMetadataStatus(payload.stream_status === 'degraded' ? 'degraded' : payload.stream_status === 'offline' ? 'offline' : 'online');
+    setMetadataClock(payload.captured_at);
+    setPipelineLatencyMs(payload.pipeline_latency_ms);
+    setZoneVersion(payload.zone_version);
+    setAreaKpis([
+      { label: 'Đối tượng trong khu', value: String(payload.kpi_delta.area_active_objects), color: 'var(--ink)' },
+      {
+        label: 'Vi phạm loại xe hôm nay',
+        value: String(payload.kpi_delta.area_zone_violations),
+        color: payload.kpi_delta.area_zone_violations > 0 ? 'var(--p0)' : 'var(--ink)',
+      },
+      { label: 'Xe nâng / container hoạt động', value: String(payload.kpi_delta.area_active_machinery), color: 'var(--ink)' },
+      { label: 'Zone khu vực', value: String(payload.kpi_delta.area_total_zones), color: 'var(--ink)' },
+    ]);
+    setAiError(null);
+  });
+
+  // Fetch events from backend API; metadata lane now drives KPI/overlay
   useEffect(() => {
     let cancelled = false;
-    const loadDetections = async () => {
-      try {
-        const snapshot = await fetchLiveDetections(activeCam, 0.35);
-        if (!cancelled) {
-          setLiveDetections(snapshot.detections);
-          setAiError(null);
-        }
-      } catch (error) {
-        if (!cancelled) {
-          setAiError(error instanceof Error ? error.message : 'Dịch vụ AI đang suy giảm.');
-        }
-      }
-    };
 
     const loadEvents = async () => {
       try {
@@ -105,16 +123,12 @@ export const AreaSecurityDashboard: React.FC = () => {
       }
     };
 
-    loadDetections();
     loadEvents();
 
-    // Metadata is used for KPIs and AI health only. The MJPEG is already annotated.
-    const detInterval = setInterval(loadDetections, 1000);
     const evtInterval = setInterval(loadEvents, 2000);
 
     return () => {
       cancelled = true;
-      clearInterval(detInterval);
       clearInterval(evtInterval);
     };
   }, [activeCam]);
@@ -151,18 +165,6 @@ export const AreaSecurityDashboard: React.FC = () => {
   };
 
   // Compute 100% Real KPI Values from DB / Backend API responses
-  const activeObjectsCount = liveDetections.length;
-  const violationsCount = events.filter((e) => !e.ok).length;
-  const activeMachineryCount = liveDetections.filter((d) => ['forklift', 'container', 'truck', 'crane'].includes(d.object_class)).length;
-  const totalZonesCount = zones.length;
-
-  const areaKpis = [
-    { label: 'Đối tượng trong khu', value: String(activeObjectsCount), color: 'var(--ink)' },
-    { label: 'Vi phạm loại xe hôm nay', value: String(violationsCount), color: violationsCount > 0 ? 'var(--p0)' : 'var(--ink)' },
-    { label: 'Xe nâng / container hoạt động', value: String(activeMachineryCount), color: 'var(--ink)' },
-    { label: 'Zone khu vực', value: String(totalZonesCount), color: 'var(--ink)' },
-  ];
-
   const videoSrc = `${getVideoFeedUrl(activeCam, { drawZones: false })}&attempt=${streamAttempt}`;
   const camTitle = 'Bãi Kiểm';
 
@@ -216,6 +218,9 @@ export const AreaSecurityDashboard: React.FC = () => {
 
               <span style={{ fontSize: '12px', color: 'var(--ink3)' }}>
                 {camTitle} · {clock}
+              </span>
+              <span style={{ fontSize: '12px', color: metadataStatus === 'online' ? 'var(--ok)' : metadataStatus === 'degraded' ? 'var(--warn)' : 'var(--ink3)' }}>
+                Metadata: {metadataStatus.toUpperCase()}
               </span>
             </div>
 
@@ -302,6 +307,42 @@ export const AreaSecurityDashboard: React.FC = () => {
                 zIndex: 1,
               }}
             />
+
+            <svg
+              viewBox="0 0 100 100"
+              preserveAspectRatio="none"
+              aria-label="Metadata overlay from realtime lane"
+              style={{
+                position: 'absolute',
+                inset: 0,
+                width: '100%',
+                height: '100%',
+                zIndex: 2,
+                pointerEvents: 'none',
+              }}
+            >
+              {metadataObjects.map((item) => {
+                const [xMin, yMin, xMax, yMax] = item.bbox;
+                const width = Math.max(0, xMax - xMin);
+                const height = Math.max(0, yMax - yMin);
+                const violation = item.zone_hits.some((hit) => hit.rule_result === 'prohibited');
+                const color = violation ? '#ff453a' : '#30d158';
+                return (
+                  <g key={item.track_id}>
+                    <rect
+                      x={xMin * 100}
+                      y={yMin * 100}
+                      width={width * 100}
+                      height={height * 100}
+                      fill="transparent"
+                      stroke={color}
+                      strokeWidth={1.5}
+                      vectorEffect="non-scaling-stroke"
+                    />
+                  </g>
+                );
+              })}
+            </svg>
 
             {/* Zone geometry comes from shared editor state; backend remains the bbox renderer. */}
             <svg
@@ -413,6 +454,24 @@ export const AreaSecurityDashboard: React.FC = () => {
             >
               {clock}
             </div>
+
+            <div
+              style={{
+                position: 'absolute',
+                left: '10px',
+                top: '9px',
+                background: 'rgba(0,0,0,.7)',
+                color: '#e3e7ea',
+                fontSize: '10px',
+                padding: '3px 7px',
+                borderRadius: '5px',
+                fontFamily: "'IBM Plex Mono', monospace",
+                border: '1px solid rgba(255,255,255,0.1)',
+                zIndex: 4,
+              }}
+            >
+              {`v${zoneVersion ?? '—'} · ${pipelineLatencyMs !== null ? `${Math.round(pipelineLatencyMs)}ms` : '—'} · ${metadataClock ? new Date(metadataClock).toLocaleTimeString('vi-VN') : 'chờ metadata'}`}
+            </div>
           </div>
 
           {(aiError || zonesError) && (
@@ -451,6 +510,37 @@ export const AreaSecurityDashboard: React.FC = () => {
                   </span>
                 );
               })}
+            </div>
+          </div>
+
+          <div style={{ marginTop: '12px', background: 'var(--panel)', border: '1px solid var(--line)', borderRadius: '12px', padding: '12px' }}>
+            <div style={{ fontSize: '11px', color: 'var(--ink3)', marginBottom: '8px', fontWeight: 600 }}>
+              Snapshot metadata đang hiển thị
+            </div>
+            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+              {metadataObjects.length === 0 ? (
+                <span style={{ fontSize: '11px', color: 'var(--ink3)' }}>Chưa có object trong frame metadata hiện tại.</span>
+              ) : (
+                metadataObjects.map((item) => {
+                  const violation = item.zone_hits.some((hit) => hit.rule_result === 'prohibited');
+                  return (
+                    <span
+                      key={`chip-${item.track_id}`}
+                      style={{
+                        fontSize: '11px',
+                        fontWeight: 600,
+                        padding: '5px 10px',
+                        borderRadius: '999px',
+                        background: violation ? 'var(--p0q)' : 'var(--okq)',
+                        color: violation ? 'var(--p0)' : 'var(--ok)',
+                        border: `1px solid ${violation ? 'var(--p0)' : 'var(--ok)'}`,
+                      }}
+                    >
+                      {`${item.display_name || item.object_class} · ${Math.round(item.confidence * 100)}%`}
+                    </span>
+                  );
+                })
+              )}
             </div>
           </div>
         </div>

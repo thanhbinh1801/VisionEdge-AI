@@ -39,6 +39,52 @@ export interface ZoneConfig {
   forbidden_classes?: string[];
 }
 
+export interface ZoneCacheInfo {
+  camera_id: string;
+  zone_version: number;
+  cache_status: 'hot' | 'refreshing';
+  refreshed_at: string;
+}
+
+export interface AreaMetadataObject {
+  track_id: string;
+  object_class: string;
+  display_name?: string;
+  confidence: number;
+  bbox: [number, number, number, number];
+  center_point: {
+    x: number;
+    y: number;
+  };
+  zone_hits: Array<{
+    zone_id: string;
+    zone_name: string;
+    rule_result: 'allowed' | 'prohibited' | 'observed';
+  }>;
+}
+
+export interface AreaFrameMetadataPayload {
+  camera_id: 'BAI-KIEM';
+  frame_id: string;
+  captured_at: string;
+  zone_version: number;
+  stream_status: 'online' | 'degraded' | 'offline';
+  pipeline_latency_ms: number;
+  objects: AreaMetadataObject[];
+  kpi_delta: {
+    area_active_objects: number;
+    area_zone_violations: number;
+    area_active_machinery: number;
+    area_total_zones: number;
+  };
+}
+
+export interface AreaFrameMetadataEvent {
+  event_type: 'AREA_FRAME_METADATA';
+  timestamp: string;
+  payload: AreaFrameMetadataPayload;
+}
+
 export interface ObjectLabel {
   id: string;
   name: string;

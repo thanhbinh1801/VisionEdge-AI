@@ -20,6 +20,8 @@ class ProcessedFrameSnapshot:
     captured_at: str
     frame: Any
     detections: tuple[dict[str, Any], ...]
+    pipeline_latency_ms: float
+    stream_status: str = "online"
 
 
 class CameraFramePipeline:
@@ -40,14 +42,17 @@ class CameraFramePipeline:
         self.inference_threshold = inference_threshold
         self._condition = threading.Condition()
         self._zones: list[dict[str, Any]] = []
+        self._zone_version = 0
         self._snapshot: ProcessedFrameSnapshot | None = None
         self._running = False
         self._thread: threading.Thread | None = None
         self._error: Exception | None = None
 
-    def update_zones(self, zones: list[dict[str, Any]]) -> None:
+    def update_zones(self, zones: list[dict[str, Any]], zone_version: int | None = None) -> None:
         with self._condition:
             self._zones = [dict(zone) for zone in zones]
+            if zone_version is not None:
+                self._zone_version = zone_version
 
     def start(self) -> None:
         with self._condition:
@@ -126,6 +131,7 @@ class CameraFramePipeline:
                     captured_at=datetime.now(timezone.utc).isoformat(),
                     frame=frame,
                     detections=tuple(dict(item) for item in detections),
+                    pipeline_latency_ms=(time.monotonic() - started_at) * 1000.0,
                 )
                 with self._condition:
                     self._snapshot = snapshot
