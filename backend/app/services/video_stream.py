@@ -21,6 +21,7 @@ class ProcessedFrameSnapshot:
     frame: Any
     detections: tuple[dict[str, Any], ...]
     pipeline_latency_ms: float
+    source_timestamp_seconds: float = 0.0
     stream_status: str = "online"
 
 
@@ -120,6 +121,8 @@ class CameraFramePipeline:
                     if not ok or frame is None:
                         raise RuntimeError(f"Unable to decode video source: {self.video_path}")
 
+                source_frame_index = max(0, int(cap.get(cv2.CAP_PROP_POS_FRAMES) or 1) - 1)
+                source_timestamp_seconds = source_frame_index / source_fps if source_fps > 0 else 0.0
                 with self._condition:
                     zones = [dict(zone) for zone in self._zones]
                 detections = self.vision_pipeline.process_frame(
@@ -132,6 +135,7 @@ class CameraFramePipeline:
                     frame=frame,
                     detections=tuple(dict(item) for item in detections),
                     pipeline_latency_ms=(time.monotonic() - started_at) * 1000.0,
+                    source_timestamp_seconds=source_timestamp_seconds,
                 )
                 with self._condition:
                     self._snapshot = snapshot

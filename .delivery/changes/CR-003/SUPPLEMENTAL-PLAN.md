@@ -8,32 +8,31 @@ change_id: CR-003
 depends_on: [CHANGE-IMPACT.md, MASTER-PLAN.md]
 ---
 
-# Supplemental Plan cho CR-003
+# Kế hoạch bổ sung cho CR-003
 
-Tai lieu nay bo sung ke hoach rieng cho `CR-003` ma khong thay the `MASTER-PLAN.md` dung chung.
+Tài liệu này bổ sung kế hoạch riêng cho `CR-003` mà không thay thế `MASTER-PLAN.md` dùng chung.
 
-## Muc tieu
-- Tach luong `Area Zone Monitoring` thanh 3 lane ro rang:
+## Mục tiêu
+- Tách luồng `Area Zone Monitoring` thành 3 lane rõ ràng:
   `video stream lane`, `realtime metadata lane`, `event/alert lane`.
-- Dua `zone rules` vao zone cache in-memory theo `camera_id`.
-- Loai DB khoi duong xu ly moi frame.
+- Đưa `zone rules` vào zone cache in-memory theo `camera_id`.
+- Loại DB khỏi đường xử lý mỗi frame.
 
-## Proposed Waves
+## Các đợt thực hiện
 
-### Wave 1: Contract and Runtime Design
-- `TASK-016` — Thiet ke contract `Area Realtime Metadata` va zone-cache semantics.
+### Đợt 1: Thiết kế contract và runtime
+- `TASK-016` — Thiết kế contract `Area Realtime Metadata` và zone-cache semantics.
 
-### Wave 2: Backend Runtime Refactor
-- `TASK-017` — Trien khai publisher metadata runtime, zone cache invalidation, va tach event lane khoi frame metadata lane.
+### Đợt 2: Tái cấu trúc backend runtime
+- `TASK-017` — Triển khai publisher metadata runtime, zone cache invalidation, và tách event lane khỏi frame metadata lane.
 
-### Wave 3: Frontend Integration
-- `TASK-018` — Cap nhat `Area Security Dashboard` consume metadata lane rieng trong khi giu video renderer tach biet.
+### Đợt 3: Tích hợp frontend
+- `TASK-018` — Cập nhật `Area Security Dashboard` consume metadata lane riêng trong khi giữ video renderer tách biệt.
 
-### Wave 4: Verification
-- `TASK-019` — Xac minh latency, non-regression, khong DB read tren hot path, va tuong thich nguoc event/alert flows.
+### Đợt 4: Xác minh
+- `TASK-019` — Xác minh latency, non-regression, không DB read trên hot path, và tương thích ngược event/alert flows.
 
-## Planning Rules
-- Khong rewrite `MASTER-PLAN.md`.
-- Khong sua hoac tai dien giai task cu thanh CR-003.
-- Moi packet moi phai trace truc tiep ve `CR-003`.
-
+## Quy tắc lập kế hoạch
+- Không rewrite `MASTER-PLAN.md`.
+- Không sửa hoặc tái diễn giải task cũ thành CR-003.
+- Mỗi packet mới phải trace trực tiếp về `CR-003`.

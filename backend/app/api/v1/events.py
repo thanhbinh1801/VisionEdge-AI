@@ -1,4 +1,3 @@
-import os
 import time
 import uuid
 from datetime import datetime, timezone
@@ -13,6 +12,7 @@ from sqlalchemy.orm import Session
 from app.services.frame_extractor import resolve_video_path
 from backend.app.core.config import settings
 from backend.app.services.area_metadata import build_area_metadata_event
+from backend.app.services.event_manager import EventManager
 from backend.app.services.video_stream import get_camera_pipeline
 from backend.app.services.vision_pipeline import (
     OBJECT_VIETNAMESE_NAMES,
@@ -20,10 +20,15 @@ from backend.app.services.vision_pipeline import (
 )
 from backend.app.services.zone_cache import zone_cache_service
 from backend.database.engine import get_db
+from backend.database.models import Event as EventModel
 from backend.database.repository import EventRepository
 
 router = APIRouter()
 vision_pipeline = AIVisionPipeline()
+event_manager = EventManager(
+    cooldown_seconds=settings.EVENT_COOLDOWN_SECONDS,
+    clips_dir=settings.CLIPS_DIR,
+)
 _FIRST_FRAME_TIMEOUT_SECONDS = 5.0
 
 class EventResponse(BaseModel):
@@ -31,6 +36,7 @@ class EventResponse(BaseModel):
     timestamp: datetime
     camera_id: str
     zone_id: str | None = None
+    zone_name: str | None = None
     lane_id: str | None = None
     event_type: str
     severity_level: int
@@ -43,6 +49,25 @@ class EventResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+def _event_response_from_model(event: EventModel) -> dict[str, Any]:
+    return {
+        "id": event.id,
+        "timestamp": event.timestamp,
+        "camera_id": event.camera_id,
+        "zone_id": event.zone_id,
+        "zone_name": event.zone.name if event.zone is not None else None,
+        "lane_id": event.lane_id,
+        "event_type": event.event_type,
+        "severity_level": event.severity_level,
+        "license_plate": event.license_plate,
+        "object_class": event.object_class,
+        "confidence": event.confidence,
+        "bbox": event.bbox,
+        "crop_image_url": event.crop_image_url,
+        "video_clip_url": event.video_clip_url,
+    }
 
 
 def _legacy_detection_from_metadata_object(item: dict[str, Any]) -> dict[str, Any]:
@@ -66,6 +91,71 @@ def _legacy_detection_from_metadata_object(item: dict[str, Any]) -> dict[str, An
         "zone_id": next((hit.get("zone_id") for hit in item.get("zone_hits", []) if hit.get("zone_id")), None),
     }
 
+
+def _persist_violation_event(
+    db: Session,
+    *,
+    camera_id: str,
+    detection: dict[str, Any],
+    timestamp: datetime | None = None,
+    source_video_path: str | None = None,
+    source_timestamp_seconds: float | None = None,
+) -> EventModel | None:
+    cls_name = detection.get("object_class", "person")
+    zone_id = detection.get("zone_id")
+    if event_manager.is_duplicate(camera_id, zone_id, cls_name):
+        return None
+
+    event_timestamp = timestamp or datetime.now(timezone.utc)
+    video_clip_url = event_manager.slice_10s_ring_buffer_clip(
+        camera_id,
+        timestamp=event_timestamp.timestamp(),
+        source_video_path=source_video_path or resolve_video_path(camera_id),
+        source_timestamp_seconds=source_timestamp_seconds,
+    )
+    event_repo = EventRepository(db)
+    event = EventModel(
+        id=f"evt-live-{uuid.uuid4().hex[:8]}",
+        timestamp=event_timestamp,
+        camera_id=camera_id,
+        zone_id=zone_id,
+        event_type="ZONE_VIOLATION",
+        severity_level=3,
+        object_class=detection.get("vietnamese_name") or OBJECT_VIETNAMESE_NAMES.get(cls_name, cls_name),
+        confidence=detection.get("confidence", 0.95),
+        bbox=detection.get("bbox"),
+        crop_image_url="/media/crops/crop_live.jpg",
+        video_clip_url=video_clip_url,
+    )
+    return event_repo.create(event)
+
+
+def persist_area_metadata_violations(
+    db: Session,
+    *,
+    camera_id: str,
+    metadata_event: dict[str, Any],
+) -> list[EventModel]:
+    captured_at = metadata_event.get("payload", {}).get("captured_at")
+    event_timestamp = None
+    if captured_at:
+        event_timestamp = datetime.fromisoformat(str(captured_at).replace("Z", "+00:00"))
+
+    persisted = []
+    for item in metadata_event.get("payload", {}).get("objects", []):
+        if not any(hit.get("rule_result") == "prohibited" for hit in item.get("zone_hits", [])):
+            continue
+        event = _persist_violation_event(
+            db,
+            camera_id=camera_id,
+            detection=_legacy_detection_from_metadata_object(item),
+            timestamp=event_timestamp,
+            source_video_path=resolve_video_path(camera_id),
+        )
+        if event is not None:
+            persisted.append(event)
+    return persisted
+
 @router.get("", response_model=list[EventResponse])
 def get_events(
     camera_id: str | None = Query(None, description="Lọc theo mã camera (GATE-01, BAI-KIEM, XUONG-AN-NINH)"),
@@ -75,7 +165,7 @@ def get_events(
 ):
     repo = EventRepository(db)
     events = repo.get_recent_events(camera_id=camera_id, severity_level=severity_level, limit=limit)
-    return events
+    return [_event_response_from_model(event) for event in events]
 
 @router.get("/video-feed")
 def video_feed(
@@ -315,33 +405,20 @@ def get_live_detections(
         vn_name = d.get("vietnamese_name") or OBJECT_VIETNAMESE_NAMES.get(cls_name, cls_name)
         is_violation = d.get("zone_violation", False)
         zone_name = d.get("zone_name")
-        zone_id = d.get("zone_id")
         severity = d.get("severity", 1)
 
         if is_violation:
             status_text = "CẢNH BÁO VI PHẠM ZONE"
-            event_repo = EventRepository(db)
-            recent = event_repo.get_recent_events(camera_id=camera_id, severity_level=3, limit=1)
-            should_insert = True
-            if recent and (datetime.now(timezone.utc) - recent[0].timestamp).total_seconds() < 10:
-                should_insert = False
-
-            if should_insert:
-                from backend.database.models import Event as EventModel
-                video_name = os.path.basename(video_path)
-                new_evt = EventModel(
-                    id=f"evt-live-{uuid.uuid4().hex[:8]}",
-                    timestamp=datetime.now(timezone.utc),
-                    camera_id=camera_id,
-                    zone_id=zone_id,
-                    event_type="ZONE_VIOLATION",
-                    severity_level=3,
-                    object_class=vn_name,
-                    confidence=d.get("confidence", 0.95),
-                    crop_image_url="/media/crops/crop_live.jpg",
-                    video_clip_url=f"/videos/{video_name}"
-                )
-                event_repo.create(new_evt)
+            source_timestamp_seconds = video_time
+            if source_timestamp_seconds is None and snapshot is not None:
+                source_timestamp_seconds = snapshot.source_timestamp_seconds
+            _persist_violation_event(
+                db,
+                camera_id=camera_id,
+                detection=d,
+                source_video_path=video_path,
+                source_timestamp_seconds=source_timestamp_seconds,
+            )
         else:
             status_text = "ĐƯỢC PHÉP"
 

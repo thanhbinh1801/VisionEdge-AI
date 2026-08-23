@@ -6,6 +6,7 @@ from contextlib import suppress
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from app.services.vision_pipeline import AIVisionPipeline
+from backend.app.api.v1.events import persist_area_metadata_violations
 from backend.app.services.area_metadata import build_area_metadata_event
 from backend.app.services.video_stream import get_camera_pipeline
 from backend.app.services.zone_cache import zone_cache_service
@@ -92,6 +93,12 @@ async def websocket_events_endpoint(websocket: WebSocket):
                 snapshot=snapshot,
                 zone_state=zone_state,
                 confidence_threshold=conf_threshold,
+            )
+            await asyncio.to_thread(
+                persist_area_metadata_violations,
+                db,
+                camera_id=camera_id,
+                metadata_event=payload,
             )
             if not await manager.send_json(websocket, payload):
                 disconnected.set()

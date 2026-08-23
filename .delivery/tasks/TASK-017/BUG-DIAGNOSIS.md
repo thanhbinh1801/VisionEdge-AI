@@ -24,7 +24,7 @@ depends_on: [TASK-016]
 1. Chạy backend từ `backend/main.py` bằng lệnh người dùng đã cung cấp ngày `2026-08-21`:
    - `python main.py`
 2. Chờ app startup hoàn tất:
-   - `SQLite Database initialized with schema.sql successfully!`
+   - `SQLite Đãtabase initialized with schema.sql successfully!`
 3. Kết nối một client tới `ws://localhost:8000/ws/v1/events?camera_id=BAI-KIEM&conf_threshold=0.35`.
 4. Quan sát log runtime:
    - `WebSocket /ws/v1/events?... [accepted]`
@@ -105,13 +105,13 @@ Vì vậy bug hiện tại nên được chẩn đoán là: **backend runtime đ
   - buộc client disconnect
   - assert server-side publisher loop dừng trong thời gian hữu hạn và connection bị gỡ khỏi manager
 
-## Recommended Fix Scope
+## Recommended Fix Phạm vi
 
-- Scope nhỏ nhất nên làm tiếp:
+- Phạm vi nhỏ nhất nên làm tiếp:
   - xác nhận và chuẩn hóa cách chạy backend để dùng đúng interpreter và dừng sạch process tree
   - tắt `reload=True` trong lần reproduce kế tiếp để loại bỏ nhiễu từ reloader process
   - nếu symptom vẫn còn sau restart sạch, bổ sung runtime-level instrumentation quanh `send_json()` để log exception path từ ứng dụng thay vì chỉ nhìn symptom từ transport
-- Scope test:
+- Phạm vi test:
   - sửa harness WebSocket test để chạy được trong `venv` hiện tại
   - thêm assertion ở seam endpoint, không chỉ ở `ConnectionManager`
 - Không khuyến nghị sửa frontend ở bước này

@@ -10,19 +10,19 @@ change_id: CR-003
 
 # API Contract Addendum cho TASK-016
 
-Tai lieu nay bo sung contract cho `CR-003` ma khong thay the cac contract da duoc phat hanh cho CR-001 va CR-002.
+Tài liệu này bổ sung contract cho `CR-003` mà không thay thế các contract đã được phát hành cho CR-001 và CR-002.
 
 ## Pham vi
-- Them lane `AREA_FRAME_METADATA` cho `Area Security Dashboard`.
-- Lam ro semantics `zone_version` va `zone cache invalidation`.
-- Giu event lane va alert lane hien huu theo huong backward-compatible.
+- Thêm lane `AREA_FRAME_METADATA` cho `Area Security Dashboard`.
+- Làm rõ semantics `zone_version` và `zone cache invalidation`.
+- Giữ event lane và alert lane hiện hữu theo hướng backward-compatible.
 
 ## Contract Decisions
-- Transport: su dung additive event type moi `AREA_FRAME_METADATA` tren gateway WebSocket hien tai `/ws/v1/events`.
-- Overlay strategy: UI area dashboard uu tien consume metadata stream de render overlay/KPI; annotated video neu co chi la lane bo tro.
-- Event feed strategy: `ZONE_VIOLATION_EVENT` va `ALERT_LEVEL_3_NOTIFICATION` tiep tuc phuc vu lich su su kien, severity, va notification.
+- Transport: sử dụng additive event type mới `AREA_FRAME_METADATA` trên gateway WebSocket hiện tại `/ws/v1/events`.
+- Overlay strategy: UI area dashboard uu tien consume metadata stream để render overlay/KPI; annotated video nếu có chỉ la lane bo tro.
+- Event feed strategy: `ZONE_VIOLATION_EVENT` và `ALERT_LEVEL_3_NOTIFICATION` tiếp tục phục vụ lịch sử sự kiện, severity, và notification.
 
-## Payload toi thieu cua AREA_FRAME_METADATA
+## Payload tối thiểu của AREA_FRAME_METADATA
 - `camera_id`
 - `frame_id`
 - `captured_at`
@@ -33,11 +33,11 @@ Tai lieu nay bo sung contract cho `CR-003` ma khong thay the cac contract da duo
 - `kpi_delta`
 
 ## Runtime Guarantees
-- Frame loop area monitoring khong doc DB moi frame.
-- Sau CRUD zone thanh cong, runtime cache theo `camera_id` phai duoc refresh/invalidate truoc khi xac nhan hoan tat request.
-- `AREA_FRAME_METADATA` khong duoc kich hoat am thanh canh bao hay notification truc tiep.
+- Frame loop area monitoring không đọc DB mỗi frame.
+- Sau CRUD zone thành công, runtime cache theo `camera_id` phải được refresh/invalidate trước khi xác nhận hoàn tất request.
+- `AREA_FRAME_METADATA` không được kich hoat am thành cảnh báo hay notification trực tiếp.
 
 ## Traceability
-- Linked requirements: `REQ-002`, `REQ-004`, `REQ-005`, `REQ-009`
+- Yêu cầu liên kết: `REQ-002`, `REQ-004`, `REQ-005`, `REQ-009`
 - Upstream change artifact: `.delivery/changes/CR-003/CHANGE-IMPACT.md`
 - Downstream consumers: `TASK-017`, `TASK-018`, `TASK-019`
