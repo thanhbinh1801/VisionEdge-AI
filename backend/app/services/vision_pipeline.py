@@ -49,7 +49,7 @@ RICH_CLASS_PROMPTS = [
     "motorbike", "motorcycle", "scooter",
     "bicycle", "bike",
     "person", "worker", "pedestrian",
-    "light pole", "lamp post", "utility pole"
+    "light pole", "lamp post", "utility pole", "pole", "column"
 ]
 
 PROMPT_TO_CANONICAL = {
@@ -77,7 +77,26 @@ PROMPT_TO_CANONICAL = {
     "pedestrian": "person",
     "light pole": "IGNORE",
     "lamp post": "IGNORE",
-    "utility pole": "IGNORE"
+    "utility pole": "IGNORE",
+    "pole": "IGNORE",
+    "column": "IGNORE"
+}
+
+POLE_LIKE_BACKGROUND_CLASSES = {
+    "light pole",
+    "lamp post",
+    "utility pole",
+    "pole",
+    "column",
+    "post",
+    "mast",
+}
+
+CRANE_RAW_CLASSES = {
+    "container crane",
+    "port crane",
+    "gantry crane",
+    "crane",
 }
 
 class AIVisionPipeline:
@@ -217,6 +236,49 @@ class AIVisionPipeline:
             cy = b1 + b3 / 2.0
         return self.point_in_polygon((cx, cy), polygon_points)
 
+    @staticmethod
+    def map_raw_class_to_canonical(raw_cls_name: str) -> str | None:
+        raw_cls_lower = raw_cls_name.lower().strip()
+        cls_name = PROMPT_TO_CANONICAL.get(raw_cls_lower, COCO_TO_CANONICAL.get(raw_cls_lower, raw_cls_lower))
+        if cls_name == "IGNORE":
+            return None
+
+        if cls_name in CANONICAL_8_OBJECT_CLASSES:
+            return cls_name
+
+        if raw_cls_lower in ("train", "box", "shipping container", "freight container"):
+            return "container"
+        if raw_cls_lower in (
+            "reach stacker",
+            "container handler",
+            "blue reach stacker",
+            "container reach stacker",
+            "mobile crane truck",
+            "bench",
+            "loader",
+        ):
+            return "forklift"
+        if raw_cls_lower in ("bus", "heavy truck", "cargo truck", "heavy cargo truck", "semi truck"):
+            return "truck"
+        return None
+
+    @staticmethod
+    def is_pole_like_crane_false_positive(raw_cls_name: str, pct_bbox: List[float]) -> bool:
+        raw_cls_lower = raw_cls_name.lower().strip()
+        if raw_cls_lower in POLE_LIKE_BACKGROUND_CLASSES:
+            return True
+        if raw_cls_lower not in CRANE_RAW_CLASSES:
+            return False
+
+        _, _, width_pct, height_pct = pct_bbox
+        if width_pct <= 0 or height_pct <= 0:
+            return False
+
+        aspect_ratio = height_pct / width_pct
+        is_narrow_tall_structure = width_pct <= 8.0 and height_pct >= 22.0 and aspect_ratio >= 4.0
+        is_very_thin_structure = width_pct <= 4.5 and height_pct >= 12.0 and aspect_ratio >= 3.0
+        return is_narrow_tall_structure or is_very_thin_structure
+
     def process_frame(self, frame_matrix, zones: List[Dict[str, Any]] = None, conf_threshold: float = 0.50) -> List[Dict[str, Any]]:
         """
         Runs YOLO inference on frame matrix and evaluates Ray-Casting PIP zone violations.
@@ -235,20 +297,9 @@ class AIVisionPipeline:
 
                         cls_id = int(box.cls[0])
                         raw_cls_name = r.names[cls_id] if hasattr(r, "names") and cls_id in r.names else "person"
-                        raw_cls_lower = raw_cls_name.lower()
-                        cls_name = PROMPT_TO_CANONICAL.get(raw_cls_lower, COCO_TO_CANONICAL.get(raw_cls_lower, raw_cls_lower))
-                        if cls_name == "IGNORE":
-                            continue
-                        
-                        if cls_name not in CANONICAL_8_OBJECT_CLASSES:
-                            if raw_cls_lower in ("train", "box", "shipping container", "freight container"):
-                                cls_name = "container"
-                            elif raw_cls_lower in ("reach stacker", "container handler", "blue reach stacker", "container reach stacker", "mobile crane truck", "bench", "loader"):
-                                cls_name = "forklift"
-                            elif raw_cls_lower in ("bus", "heavy truck", "cargo truck", "heavy cargo truck", "semi truck"):
-                                cls_name = "truck"
-                            else:
-                                continue  # Skip unmapped non-canonical noise objects instead of forcing to person
+                        cls_name = self.map_raw_class_to_canonical(raw_cls_name)
+                        if cls_name is None:
+                            continue  # Skip ignored background and unmapped non-canonical noise.
                         xyxy = box.xyxy[0].tolist()
 
                         h, w = frame_matrix.shape[:2]
@@ -262,8 +313,8 @@ class AIVisionPipeline:
                             round(((xyxy[3] - xyxy[1]) / h) * 100.0, 1)
                         ]
 
-                        # Suppress ultra-thin vertical false positives for crane (e.g. light poles width < 2.5%)
-                        if cls_name == "crane" and pct_bbox[2] < 2.5:
+                        # Suppress pole/column-shaped crane false positives without removing wide crane structures.
+                        if cls_name == "crane" and self.is_pole_like_crane_false_positive(raw_cls_name, pct_bbox):
                             continue
 
                         detection = {

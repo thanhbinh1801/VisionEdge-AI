@@ -90,7 +90,7 @@ export const AreaSecurityDashboard: React.FC = () => {
     setAiError(null);
   });
 
-  // Fetch events from backend API; metadata lane now drives KPI/overlay
+  // Fetch events from backend API; metadata lane drives KPI/status, while MJPEG remains bbox source of truth.
   useEffect(() => {
     let cancelled = false;
 
@@ -308,43 +308,7 @@ export const AreaSecurityDashboard: React.FC = () => {
               }}
             />
 
-            <svg
-              viewBox="0 0 100 100"
-              preserveAspectRatio="none"
-              aria-label="Metadata overlay from realtime lane"
-              style={{
-                position: 'absolute',
-                inset: 0,
-                width: '100%',
-                height: '100%',
-                zIndex: 2,
-                pointerEvents: 'none',
-              }}
-            >
-              {metadataObjects.map((item) => {
-                const [xMin, yMin, xMax, yMax] = item.bbox;
-                const width = Math.max(0, xMax - xMin);
-                const height = Math.max(0, yMax - yMin);
-                const violation = item.zone_hits.some((hit) => hit.rule_result === 'prohibited');
-                const color = violation ? '#ff453a' : '#30d158';
-                return (
-                  <g key={item.track_id}>
-                    <rect
-                      x={xMin * 100}
-                      y={yMin * 100}
-                      width={width * 100}
-                      height={height * 100}
-                      fill="transparent"
-                      stroke={color}
-                      strokeWidth={1.5}
-                      vectorEffect="non-scaling-stroke"
-                    />
-                  </g>
-                );
-              })}
-            </svg>
-
-            {/* Zone geometry comes from shared editor state; backend remains the bbox renderer. */}
+            {/* Zone geometry comes from shared editor state; the MJPEG stream remains the only bbox renderer. */}
             <svg
               viewBox="0 0 100 100"
               preserveAspectRatio="none"

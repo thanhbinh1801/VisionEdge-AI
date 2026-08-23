@@ -1,8 +1,45 @@
 import os
-import pytest
-from backend.app.services.vision_pipeline import AIVisionPipeline, CANONICAL_8_OBJECT_CLASSES
+
+import numpy as np
+
 from backend.app.services.event_manager import EventManager
 from backend.app.services.video_stream import VideoStreamService
+from backend.app.services.vision_pipeline import (
+    CANONICAL_8_OBJECT_CLASSES,
+    AIVisionPipeline,
+)
+
+
+class _FakeTensor:
+    def __init__(self, values):
+        self._values = values
+
+    def __getitem__(self, index):
+        return self._values[index]
+
+    def tolist(self):
+        return list(self._values)
+
+
+class _FakeBox:
+    def __init__(self, cls_id, confidence, xyxy):
+        self.cls = _FakeTensor([cls_id])
+        self.conf = _FakeTensor([confidence])
+        self.xyxy = _FakeTensor([_FakeTensor(xyxy)])
+
+
+class _FakeResult:
+    def __init__(self, names, boxes):
+        self.names = names
+        self.boxes = boxes
+
+
+class _FakeModel:
+    def __init__(self, results):
+        self._results = results
+
+    def predict(self, *args, **kwargs):
+        return self._results
 
 def test_8_canonical_object_classes():
     pipeline = AIVisionPipeline()
@@ -80,3 +117,34 @@ def test_process_frame_confidence_threshold_filtering():
     assert isinstance(dets, list)
     assert len(dets) == 0
 
+
+def test_process_frame_suppresses_pole_shaped_crane_false_positive():
+    pipeline = AIVisionPipeline()
+    pipeline.model = _FakeModel([
+        _FakeResult(
+            {0: "crane"},
+            [_FakeBox(0, 0.88, [860, 80, 920, 660])],
+        )
+    ])
+    frame = np.zeros((720, 1280, 3), dtype=np.uint8)
+
+    dets = pipeline.process_frame(frame, conf_threshold=0.50)
+
+    assert dets == []
+
+
+def test_process_frame_keeps_wide_valid_crane_detection():
+    pipeline = AIVisionPipeline()
+    pipeline.model = _FakeModel([
+        _FakeResult(
+            {0: "port crane"},
+            [_FakeBox(0, 0.88, [380, 150, 980, 520])],
+        )
+    ])
+    frame = np.zeros((720, 1280, 3), dtype=np.uint8)
+
+    dets = pipeline.process_frame(frame, conf_threshold=0.50)
+
+    assert len(dets) == 1
+    assert dets[0]["object_class"] == "crane"
+    assert dets[0]["vietnamese_name"] == "Xe cẩu"
