@@ -17,7 +17,9 @@ CANONICAL_8_OBJECT_CLASSES = [
 ]
 
 OBJECT_VIETNAMESE_NAMES = {
-    "container": "Xe container",
+    # "Container" chứ không phải "Xe container": lớp này bao cả xe chở container lẫn
+    # thùng container xếp tĩnh trong bãi, vì taxonomy 8 lớp không tách hai thứ đó ra.
+    "container": "Container",
     "truck": "Xe tải",
     "forklift": "Xe nâng",
     "crane": "Xe cẩu",
@@ -27,7 +29,13 @@ OBJECT_VIETNAMESE_NAMES = {
     "person": "Người"
 }
 
-# COCO class mapping to canonical 8 classes
+# Ánh xạ nhãn COCO sang 8 lớp chuẩn. Chỉ dùng cho nhánh dự phòng yolov8n (COCO 80 lớp
+# không có container/forklift/crane); YOLO-World vốn đã trả thẳng tên lớp chuẩn.
+#
+# "train" -> "container" là xấp xỉ có chủ ý: mô hình COCO thường gán nhãn train cho xe
+# đầu kéo chở container vì hình khối hộp dài giống nhau. Trước đây bảng này còn có
+# "bench" -> "forklift", một suy diễn vô căn cứ khiến ghế băng và mọi vật thể ngang tầm
+# bị báo thành xe nâng — đã bỏ. Không thêm ánh xạ mới nếu không có căn cứ hình học.
 COCO_TO_CANONICAL = {
     "train": "container",
     "truck": "truck",
@@ -36,7 +44,37 @@ COCO_TO_CANONICAL = {
     "motorcycle": "motorbike",
     "bicycle": "bicycle",
     "person": "person",
-    "bench": "forklift"
+}
+
+# Prompt đưa vào YOLO-World, tách khỏi tên lớp chuẩn vì hai thứ phục vụ hai mục đích
+# khác nhau: tên lớp là khoá dữ liệu ổn định (CSDL, API, UI đều bám vào), còn prompt là
+# chuỗi ngôn ngữ nạp cho CLIP và phải chỉnh theo cảnh thật.
+#
+# Trước đây `set_classes()` nhận thẳng 8 tên lớp trần, và kết quả đo trên footage cảng
+# (backend/scripts/render_zone_overlay.py) là: **0 detection trên toàn bộ bãi Bãi Kiểm**
+# — cả một bãi đầy container lẫn một chiếc reach stacker giữa khung hình đều bị bỏ qua.
+#
+# Các prompt dưới đây được chọn bằng đo đạc, không phải phỏng đoán:
+#   - "cargo container box" bắt được container; "shipping container" thì không.
+#   - reach stacker chỉ chịu khớp với "yellow heavy machinery vehicle" (khớp cả khi xe
+#     màu xanh — CLIP bám hình dáng máy công trình nhiều hơn bám từ "yellow").
+#   - "semi trailer truck" nhận xe đầu kéo ở cổng với 0.89, so với 0.40 của "truck".
+#   - Prompt dạng câu dài ("a tall gantry crane at a port") làm nổ false positive:
+#     57 box trên một khung hình. Giữ prompt ở mức cụm danh từ ngắn.
+#
+# Hai prompt đã thử và bị loại, đừng thêm lại:
+#   - "truck trailer": 33 box @0.97 trên một khung hình Xưởng An Ninh.
+#   - "flatbed trailer": cứu được chiếc xe ở Làn IN 1 (0.27 -> 0.40) nhưng lại nuốt
+#     luôn reach stacker với 0.74, biến xe nâng thành xe tải. Đánh đổi không đáng.
+CANONICAL_CLASS_PROMPTS = {
+    "container": ["cargo container box"],
+    "truck": ["semi trailer truck", "truck"],
+    "forklift": ["forklift", "reach stacker", "yellow heavy machinery vehicle"],
+    "crane": ["crane", "gantry crane"],
+    "car": ["car"],
+    "motorbike": ["motorcycle"],
+    "bicycle": ["bicycle"],
+    "person": ["person"],
 }
 
 # Rich Open-Vocabulary Prompts for Port & Industrial Yard Equipment (CR-001)
@@ -106,56 +144,105 @@ class AIVisionPipeline:
     Supports 8 Object Classes (CR-001) & Open-Vocabulary Custom Object Detection.
     """
 
-    def __init__(self, model_name_or_path: str = "yolov8s-worldv2.pt"):
+    # Ngưỡng mặc định khi gọi trực tiếp mà không truyền cấu hình.
+    # Giá trị thật lúc chạy lấy từ DETECTION_CONFIDENCE_THRESHOLD trong .env.
+    DEFAULT_CONFIDENCE_THRESHOLD = 0.30
+
+    # Ultralytics mặc định iou=0.7, quá lỏng với cảnh này: một xe đầu kéo ở cổng cho ra
+    # hai box lồng nhau (0.89 bao cả đầu kéo, 0.58 bao riêng rơ-moóc, IoU ~0.76) và cả
+    # hai cùng lọt lên UI. Kèm agnostic_nms để gộp cả box trùng khác nhãn — với nhiều
+    # prompt cho cùng một lớp, chuyện hai prompt cùng bắt một vật là bình thường.
+    DEFAULT_IOU_THRESHOLD = 0.5
+
+    def __init__(
+        self,
+        model_name_or_path: str = "yolov8s-worldv2.pt",
+        confidence_threshold: float = None,
+    ):
         self.model_name_or_path = model_name_or_path
+        self.confidence_threshold = (
+            self.DEFAULT_CONFIDENCE_THRESHOLD
+            if confidence_threshold is None
+            else float(confidence_threshold)
+        )
         self.model = None
         self.model_type = "yolo-world"
-        self.classes = list(RICH_CLASS_PROMPTS)
+        self.classes = list(CANONICAL_8_OBJECT_CLASSES)
+        # `prompts` là thứ nạp vào model; `prompt_to_class` đưa nhãn model trả về ngược
+        # lại tên lớp chuẩn. Xem CANONICAL_CLASS_PROMPTS để biết vì sao phải tách đôi.
+        self.prompts = []
+        self.prompt_to_class = {}
+        self._rebuild_prompts()
         self._initialize_model()
 
-    def _resolve_model_path(self) -> str:
+    def _rebuild_prompts(self):
+        """Dựng lại danh sách prompt phẳng và bảng tra ngược từ self.classes."""
+        self.prompts = []
+        self.prompt_to_class = {}
+        for cls_name in self.classes:
+            # Lớp tuỳ chỉnh do người dùng thêm chưa có prompt riêng, dùng chính tên nó.
+            for prompt in CANONICAL_CLASS_PROMPTS.get(cls_name, [cls_name]):
+                if prompt not in self.prompt_to_class:
+                    self.prompts.append(prompt)
+                self.prompt_to_class[prompt.lower()] = cls_name
+
+    def _weights_dir(self) -> str:
         current_dir = os.path.dirname(os.path.abspath(__file__))
         backend_dir = os.path.dirname(os.path.dirname(current_dir))
-        project_root = os.path.dirname(backend_dir)
+        return os.path.join(backend_dir, "app", "ai", "weights")
 
-        possible_paths = [
-            os.path.join(backend_dir, "app", "ai", "weights", self.model_name_or_path),
-            os.path.join(project_root, "backend", "app", "ai", "weights", self.model_name_or_path),
-            os.path.join(backend_dir, "app", "ai", "weights", "yolov8n.pt"),
-            self.model_name_or_path,
-        ]
-        for p in possible_paths:
-            if os.path.exists(p):
-                return p
-        return self.model_name_or_path
+    def _resolve_model_path(self, model_name: str = None) -> str:
+        """
+        Trả về đường dẫn tuyệt đối tới file weights.
+
+        Nếu file chưa có sẵn, tải asset từ Ultralytics về thư mục
+        backend/app/ai/weights/. Truyền đường dẫn đầy đủ cho trình tải để weights
+        không bị ghi vào thư mục làm việc hiện tại (vốn thay đổi theo cách khởi chạy).
+        """
+        model_name = model_name or self.model_name_or_path
+
+        # Đường dẫn tuyệt đối do người dùng chỉ định thì tôn trọng nguyên vẹn.
+        if os.path.isabs(model_name):
+            return model_name
+
+        local_path = os.path.join(self._weights_dir(), os.path.basename(model_name))
+        if os.path.exists(local_path):
+            return local_path
+
+        os.makedirs(self._weights_dir(), exist_ok=True)
+        try:
+            from ultralytics.utils.downloads import attempt_download_asset
+            logger.info(f"Weights chưa có sẵn, đang tải: {model_name}")
+            attempt_download_asset(local_path)
+        except Exception as e:
+            logger.warning(f"Không tải được weights '{model_name}': {e}")
+
+        return local_path
 
     def _initialize_model(self):
         model_source = self._resolve_model_path()
         logger.info(f"Attempting to load model weights from: {model_source}")
-        
+
         # 1. Try loading YOLOWorld
-        try:
-            from ultralytics import YOLOWorld
-            if os.path.exists(model_source) and "world" in model_source.lower():
+        if "world" in os.path.basename(model_source).lower():
+            try:
+                from ultralytics import YOLOWorld
                 self.model = YOLOWorld(model_source)
-                self.model.set_classes(self.classes)
+                self.model.set_classes(self.prompts)
                 self.model_type = "yolo-world"
                 logger.info(f"Loaded YOLO-World v2 model with rich prompts from: {model_source}")
                 return
-        except Exception as e:
-            logger.warning(f"YOLO-World load error: {e}")
+            except Exception as e:
+                logger.warning(f"YOLO-World load error: {e}")
 
         # 2. Fallback to standard YOLOv8 (yolov8n.pt in weights directory)
         try:
             from ultralytics import YOLO
-            yolov8n_path = os.path.join(os.path.dirname(model_source), "yolov8n.pt")
-            if not os.path.exists(yolov8n_path):
-                yolov8n_path = model_source
-            if os.path.exists(yolov8n_path):
-                self.model = YOLO(yolov8n_path)
-                self.model_type = "yolov8"
-                logger.info(f"Loaded YOLOv8 model from: {yolov8n_path}")
-                return
+            yolov8n_path = self._resolve_model_path("yolov8n.pt")
+            self.model = YOLO(yolov8n_path)
+            self.model_type = "yolov8"
+            logger.info(f"Loaded YOLOv8 model from: {yolov8n_path}")
+            return
         except Exception as e:
             logger.warning(f"YOLOv8 model load fallback error: {e}")
 
@@ -167,9 +254,10 @@ class AIVisionPipeline:
             if cls_name not in combined_classes:
                 combined_classes.append(cls_name)
         self.classes = combined_classes
+        self._rebuild_prompts()
         if self.model and self.model_type == "yolo-world":
             try:
-                self.model.set_classes(self.classes)
+                self.model.set_classes(self.prompts)
             except Exception as e:
                 logger.error(f"Error setting custom classes: {e}")
 
@@ -254,7 +342,9 @@ class AIVisionPipeline:
             "blue reach stacker",
             "container reach stacker",
             "mobile crane truck",
-            "bench",
+            # "bench" đã bị gỡ khỏi đây cùng lý do đã gỡ khỏi COCO_TO_CANONICAL:
+            # ghế băng không phải xe nâng, và suy diễn này làm mọi vật thể ngang tầm
+            # bị báo thành forklift. Xem test_bench_is_no_longer_mapped_to_forklift.
             "loader",
         ):
             return "forklift"
@@ -279,15 +369,31 @@ class AIVisionPipeline:
         is_very_thin_structure = width_pct <= 4.5 and height_pct >= 12.0 and aspect_ratio >= 3.0
         return is_narrow_tall_structure or is_very_thin_structure
 
-    def process_frame(self, frame_matrix, zones: List[Dict[str, Any]] = None, conf_threshold: float = 0.50) -> List[Dict[str, Any]]:
+    def process_frame(self, frame_matrix, zones: List[Dict[str, Any]] = None, conf_threshold: float = None) -> List[Dict[str, Any]]:
         """
         Runs YOLO inference on frame matrix and evaluates Ray-Casting PIP zone violations.
         Filters out detections below specified confidence threshold.
+
+        Bỏ trống conf_threshold thì dùng self.confidence_threshold, tức giá trị
+        DETECTION_CONFIDENCE_THRESHOLD trong .env.
         """
+        if conf_threshold is None:
+            conf_threshold = self.confidence_threshold
         detections = []
         if self.model is not None and frame_matrix is not None:
             try:
-                results = self.model.predict(frame_matrix, conf=conf_threshold, verbose=False)
+                results = self.model.predict(
+                    frame_matrix,
+                    conf=conf_threshold,
+                    iou=self.DEFAULT_IOU_THRESHOLD,
+                    agnostic_nms=True,
+                    verbose=False,
+                )
+                # Lớp hợp lệ gồm 8 lớp chuẩn và cả lớp mở do người dùng thêm qua
+                # update_custom_classes(); nếu chỉ nhận 8 lớp thì tính năng open-vocab
+                # của YOLO-World trở thành vô nghĩa vì kết quả bị vứt ngay tại đây.
+                known_classes = set(CANONICAL_8_OBJECT_CLASSES) | set(self.classes)
+
                 for r in results:
                     boxes = r.boxes
                     for box in boxes:
@@ -296,10 +402,35 @@ class AIVisionPipeline:
                             continue
 
                         cls_id = int(box.cls[0])
-                        raw_cls_name = r.names[cls_id] if hasattr(r, "names") and cls_id in r.names else "person"
-                        cls_name = self.map_raw_class_to_canonical(raw_cls_name)
+                        names = getattr(r, "names", None) or {}
+                        raw_cls_name = names.get(cls_id)
+                        if not raw_cls_name:
+                            logger.warning(
+                                f"Không tra được tên lớp cho cls_id={cls_id}, bỏ qua detection."
+                            )
+                            continue
+
+                        # YOLO-World trả về chính prompt đã nạp, nên tra bảng prompt
+                        # trước; COCO_TO_CANONICAL chỉ còn dùng cho nhánh yolov8n.
+                        raw_lower = raw_cls_name.lower()
+                        cls_name = self.prompt_to_class.get(raw_lower)
+                        if cls_name is None:
+                            # Nhãn không nằm trong prompt đã nạp: đưa qua bảng ánh xạ
+                            # rộng hơn (COCO, prompt mô tả cảng, nền IGNORE) trước khi bỏ.
+                            cls_name = self.map_raw_class_to_canonical(raw_cls_name)
                         if cls_name is None:
                             continue  # Skip ignored background and unmapped non-canonical noise.
+
+                        # Không đoán bừa lớp. Trước đây mọi nhãn lạ đều bị ép thành
+                        # "person", nên một vật thể không rõ là gì lại xuất hiện trên UI
+                        # như một người thật và sinh vi phạm severity 3 — nguồn gốc của
+                        # feed sự kiện toàn "Người · Vi phạm". Không nhận ra thì bỏ qua.
+                        if cls_name not in known_classes:
+                            logger.debug(
+                                f"Bỏ qua lớp ngoài danh mục: '{raw_cls_name}' -> '{cls_name}'."
+                            )
+                            continue
+
                         xyxy = box.xyxy[0].tolist()
 
                         h, w = frame_matrix.shape[:2]

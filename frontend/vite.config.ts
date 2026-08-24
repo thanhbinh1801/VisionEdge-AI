@@ -13,5 +13,10 @@ export default defineConfig({
   server: {
     port: 3000,
     host: true,
+    proxy: {
+      // Video demo & ảnh prototype được backend FastAPI mount tại cổng 8000
+      '/videos': { target: 'http://localhost:8000', changeOrigin: true },
+      '/api': { target: 'http://localhost:8000', changeOrigin: true, ws: true },
+    },
   },
 });

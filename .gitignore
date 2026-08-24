@@ -37,6 +37,7 @@ build/
 .idea/
 .DS_Store
 Thumbs.db
+.claude/skills/
 
 # AI Model Weights & Video files
 *.pt
@@ -44,3 +45,8 @@ weights/
 *.mp4
 
 .delivery/TEAM-PLAN-2PEOPLE-REMAINING-4-DAYS.md
+HANDOFF.md
+
+# Ảnh xác minh zone: sinh lại được bằng backend/scripts/render_zone_overlay.py,
+# mỗi lần chạy ra vài MB PNG nên không đưa vào lịch sử git.
+docs/verification/

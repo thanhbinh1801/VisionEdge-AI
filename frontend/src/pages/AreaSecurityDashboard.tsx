@@ -9,7 +9,9 @@ import {
 import { AreaEvent, AreaFrameMetadataEvent, AreaMetadataObject, ZoneConfig } from '../types';
 
 const CANONICAL_8_TYPES = [
-  { key: 'container', label: 'Xe container' },
+  // "Container" chứ không phải "Xe container": lớp này bao cả xe chở container lẫn
+  // thùng container xếp tĩnh trong bãi. Khớp với nhãn ở GateDashboard và backend.
+  { key: 'container', label: 'Container' },
   { key: 'truck', label: 'Xe tải' },
   { key: 'forklift', label: 'Xe nâng' },
   { key: 'crane', label: 'Xe cẩu' },

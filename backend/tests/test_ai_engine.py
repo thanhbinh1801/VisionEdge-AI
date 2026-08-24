@@ -6,6 +6,7 @@ from backend.app.services.event_manager import EventManager
 from backend.app.services.video_stream import VideoStreamService
 from backend.app.services.vision_pipeline import (
     CANONICAL_8_OBJECT_CLASSES,
+    COCO_TO_CANONICAL,
     AIVisionPipeline,
 )
 
@@ -22,6 +23,8 @@ class _FakeTensor:
 
 
 class _FakeBox:
+    """Bắt chước đúng phần giao diện của ultralytics Boxes mà process_frame dùng tới."""
+
     def __init__(self, cls_id, confidence, xyxy):
         self.cls = _FakeTensor([cls_id])
         self.conf = _FakeTensor([confidence])
@@ -37,10 +40,20 @@ class _FakeResult:
 class _FakeModel:
     def __init__(self, results):
         self._results = results
+        self.last_kwargs = {}
 
     def predict(self, *args, **kwargs):
+        self.last_kwargs = kwargs
         return self._results
 
+
+def _pipeline_with(names, boxes):
+    pipeline = AIVisionPipeline()
+    pipeline.model = _FakeModel([_FakeResult(names, boxes)])
+    return pipeline
+
+
+FRAME = np.zeros((100, 200, 3), dtype=np.uint8)
 def test_8_canonical_object_classes():
     pipeline = AIVisionPipeline()
     assert len(CANONICAL_8_OBJECT_CLASSES) == 8
@@ -111,6 +124,8 @@ def test_video_stream_service_init():
     assert stream.camera_id == "BAI-KIEM"
     assert os.path.exists(stream.video_path)
 
+
+
 def test_process_frame_confidence_threshold_filtering():
     pipeline = AIVisionPipeline()
     dets = pipeline.process_frame(None, conf_threshold=0.50)
@@ -148,3 +163,107 @@ def test_process_frame_keeps_wide_valid_crane_detection():
     assert len(dets) == 1
     assert dets[0]["object_class"] == "crane"
     assert dets[0]["vietnamese_name"] == "Xe cẩu"
+
+
+# --- Ánh xạ tên lớp: không được đoán bừa -------------------------------------
+#
+# Nhánh cũ ép mọi nhãn không thuộc 8 lớp chuẩn thành "person". Hệ quả trên UI: vật thể
+# không rõ là gì lại hiện lên như một người thật và sinh vi phạm severity 3. Bộ test
+
+def test_unknown_class_is_dropped_not_relabelled_as_person():
+    pipeline = _pipeline_with(
+        names={0: "traffic light", 1: "person"},
+        boxes=[_FakeBox(0, 0.9, [10, 10, 30, 30]), _FakeBox(1, 0.8, [50, 50, 70, 90])],
+    )
+
+    detections = pipeline.process_frame(FRAME)
+
+    assert [d["object_class"] for d in detections] == ["person"]
+
+
+def test_missing_class_name_is_dropped():
+    """cls_id không có trong bảng names thì bỏ detection, không mặc định thành 'person'."""
+    pipeline = _pipeline_with(names={7: "person"}, boxes=[_FakeBox(0, 0.9, [10, 10, 30, 30])])
+
+    assert pipeline.process_frame(FRAME) == []
+
+
+def test_custom_open_vocabulary_class_survives():
+    """Lớp do người dùng thêm phải đi qua được, nếu không open-vocab thành vô nghĩa."""
+    pipeline = _pipeline_with(names={0: "safety_helmet"}, boxes=[_FakeBox(0, 0.7, [10, 10, 30, 30])])
+    pipeline.update_custom_classes(["safety_helmet"])
+
+    detections = pipeline.process_frame(FRAME)
+
+    assert len(detections) == 1
+    assert detections[0]["object_class"] == "safety_helmet"
+    # Chưa có tên tiếng Việt thì hiển thị nguyên văn, không rơi về nhãn của lớp khác.
+    assert detections[0]["vietnamese_name"] == "safety_helmet"
+
+
+def test_world_prompts_map_back_to_canonical_classes():
+    """
+    Model trả về chính prompt đã nạp, nên phải tra ngược được về tên lớp chuẩn.
+
+    Nếu tầng ánh xạ này hỏng, "cargo container box" sẽ bị coi là lớp lạ và bị bỏ —
+    tức là gỡ prompt mô tả đi mà không ai biết.
+    """
+    pipeline = _pipeline_with(
+        names={0: "cargo container box", 1: "semi trailer truck", 2: "yellow heavy machinery vehicle"},
+        boxes=[
+            _FakeBox(0, 0.6, [10, 10, 30, 30]),
+            _FakeBox(1, 0.9, [40, 10, 60, 30]),
+            _FakeBox(2, 0.5, [70, 10, 90, 30]),
+        ],
+    )
+
+    detections = pipeline.process_frame(FRAME)
+
+    assert [d["object_class"] for d in detections] == ["container", "truck", "forklift"]
+
+
+def test_nms_is_tightened_so_nested_boxes_collapse():
+    """
+    iou mặc định 0.7 của Ultralytics để lọt hai box lồng nhau trên cùng một xe đầu kéo
+    (0.89 bao cả xe, 0.58 bao riêng rơ-moóc). Kèm agnostic_nms vì nhiều prompt cùng
+    trỏ về một lớp thì hai prompt cùng bắt một vật là chuyện thường.
+    """
+    pipeline = _pipeline_with(names={0: "person"}, boxes=[_FakeBox(0, 0.9, [10, 10, 30, 30])])
+
+    pipeline.process_frame(FRAME)
+
+    assert pipeline.model.last_kwargs["iou"] == AIVisionPipeline.DEFAULT_IOU_THRESHOLD
+    assert pipeline.model.last_kwargs["agnostic_nms"] is True
+
+
+def test_prompts_are_sent_to_model_not_bare_class_names():
+    """
+    `set_classes` phải nhận prompt, không phải 8 tên lớp trần.
+
+    Đo trên footage thật: tên trần cho 0 detection trên toàn bộ bãi Bãi Kiểm.
+    """
+    pipeline = AIVisionPipeline()
+
+    assert "cargo container box" in pipeline.prompts
+    assert "reach stacker" in pipeline.prompts
+    # Tên lớp chuẩn vẫn phải giữ nguyên: CSDL, API và UI đều bám vào nó.
+    assert pipeline.classes[:8] == CANONICAL_8_OBJECT_CLASSES
+
+
+def test_custom_class_gets_its_own_prompt():
+    pipeline = AIVisionPipeline()
+    pipeline.update_custom_classes(["safety_helmet"])
+
+    assert "safety_helmet" in pipeline.prompts
+    assert pipeline.prompt_to_class["safety_helmet"] == "safety_helmet"
+    # Thêm lớp mới không được làm mất prompt của các lớp chuẩn.
+    assert "cargo container box" in pipeline.prompts
+
+
+def test_bench_is_no_longer_mapped_to_forklift():
+    """Ánh xạ 'bench' -> 'forklift' là suy diễn vô căn cứ, đã bị gỡ khỏi COCO_TO_CANONICAL."""
+    assert "bench" not in COCO_TO_CANONICAL
+
+    pipeline = _pipeline_with(names={0: "bench"}, boxes=[_FakeBox(0, 0.9, [10, 10, 30, 30])])
+
+    assert pipeline.process_frame(FRAME) == []
