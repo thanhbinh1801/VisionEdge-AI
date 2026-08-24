@@ -64,4 +64,4 @@ HANDOFF.md
 
 # Ảnh xác minh zone: sinh lại được bằng backend/scripts/render_zone_overlay.py,
 # mỗi lần chạy ra vài MB PNG nên không đưa vào lịch sử git.
-docs/verification/
+docs/verification/
