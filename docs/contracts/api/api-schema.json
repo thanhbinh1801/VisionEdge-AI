@@ -1,58 +1,134 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "title": "SentriAI Mini REST API Schema Foundation (CR-001, CR-002 & CR-003)",
-  "description": "JSON Schema definition for all REST API endpoints, schemas, and data models in SentriAI Mini",
-  "version": "1.2.0",
+  "title": "SentriAI Mini REST API Schema Foundation (CR-001, CR-002, CR-003 & CR-004)",
+  "description": "JSON Schema definition for REST API endpoints, schemas, realtime metadata, and CR-004 dataset object labeling contracts in SentriAI Mini.",
+  "version": "1.3.0",
+  "endpoints": {
+    "dataset_labels_list": {
+      "method": "GET",
+      "path": "/api/v1/dataset/labels",
+      "query": {
+        "include_deleted": { "type": "boolean", "default": false }
+      },
+      "response": { "$ref": "#/definitions/LabelListEnvelope" }
+    },
+    "dataset_labels_create": {
+      "method": "POST",
+      "path": "/api/v1/dataset/labels",
+      "request": { "$ref": "#/definitions/CreateLabelRequest" },
+      "response": { "$ref": "#/definitions/LabelMutationEnvelope" }
+    },
+    "dataset_labels_update": {
+      "method": "PUT",
+      "path": "/api/v1/dataset/labels/{label_id}",
+      "request": { "$ref": "#/definitions/UpdateLabelRequest" },
+      "response": { "$ref": "#/definitions/LabelMutationEnvelope" }
+    },
+    "dataset_labels_delete": {
+      "method": "DELETE",
+      "path": "/api/v1/dataset/labels/{label_id}",
+      "response": { "$ref": "#/definitions/LabelDeleteEnvelope" }
+    },
+    "dataset_labels_restore": {
+      "method": "POST",
+      "path": "/api/v1/dataset/labels/{label_id}/restore",
+      "response": { "$ref": "#/definitions/LabelMutationEnvelope" }
+    },
+    "dataset_sources_list": {
+      "method": "GET",
+      "path": "/api/v1/dataset/sources",
+      "query": {
+        "page": { "type": "integer", "minimum": 1, "default": 1 },
+        "limit": { "type": "integer", "minimum": 1, "maximum": 100, "default": 50 },
+        "kind": { "$ref": "#/definitions/DatasetSourceKind" }
+      },
+      "response": { "$ref": "#/definitions/SourceListEnvelope" }
+    },
+    "dataset_sources_upload": {
+      "method": "POST",
+      "path": "/api/v1/dataset/sources",
+      "content_type": "multipart/form-data",
+      "form_fields": {
+        "file": "binary image/video",
+        "name": "optional string",
+        "idempotency_key": "optional string"
+      },
+      "response": { "$ref": "#/definitions/SourceEnvelope" }
+    },
+    "dataset_source_detail": {
+      "method": "GET",
+      "path": "/api/v1/dataset/sources/{source_id}",
+      "response": { "$ref": "#/definitions/SourceEnvelope" }
+    },
+    "dataset_source_frame": {
+      "method": "GET",
+      "path": "/api/v1/dataset/sources/{source_id}/frame",
+      "query": {
+        "frame_index": { "type": "integer", "minimum": 0 },
+        "timestamp": { "type": "number", "minimum": 0 }
+      },
+      "success_content_type": "image/jpeg",
+      "error_response": { "$ref": "#/definitions/ResponseEnvelope" }
+    },
+    "dataset_samples_list": {
+      "method": "GET",
+      "path": "/api/v1/dataset/samples",
+      "query": {
+        "source_id": { "type": "string" },
+        "frame_index": { "type": "integer", "minimum": 0 },
+        "label_id": { "type": "string" }
+      },
+      "response": { "$ref": "#/definitions/SampleListEnvelope" }
+    },
+    "dataset_samples_batch": {
+      "method": "POST",
+      "path": "/api/v1/dataset/samples:batch",
+      "request": { "$ref": "#/definitions/BatchCreateSamplesRequest" },
+      "response": { "$ref": "#/definitions/BatchCreateSamplesEnvelope" }
+    },
+    "dataset_sample_update": {
+      "method": "PUT",
+      "path": "/api/v1/dataset/samples/{sample_id}",
+      "request": { "$ref": "#/definitions/UpdateBBoxSampleRequest" },
+      "response": { "$ref": "#/definitions/SampleMutationEnvelope" }
+    },
+    "dataset_sample_delete": {
+      "method": "DELETE",
+      "path": "/api/v1/dataset/samples/{sample_id}",
+      "response": { "$ref": "#/definitions/SampleMutationEnvelope" }
+    },
+    "dataset_sync_zones": {
+      "method": "POST",
+      "path": "/api/v1/dataset/sync-zones",
+      "response": { "$ref": "#/definitions/SyncZonesEnvelope" }
+    }
+  },
   "definitions": {
     "ResponseEnvelope": {
       "type": "object",
       "required": ["success", "data", "error", "meta"],
       "properties": {
-        "success": {
-          "type": "boolean",
-          "description": "Trạng thái thành công của API call"
-        },
-        "data": {
-          "description": "Dữ liệu trả về (Generic T hoặc null khi thất bại)"
-        },
+        "success": { "type": "boolean" },
+        "data": {},
         "error": {
           "oneOf": [
             { "$ref": "#/definitions/ErrorPayload" },
             { "type": "null" }
           ]
         },
-        "meta": {
-          "$ref": "#/definitions/MetaPayload"
-        }
+        "meta": { "$ref": "#/definitions/MetaPayload" }
       }
     },
     "MetaPayload": {
       "type": "object",
       "required": ["timestamp", "request_id"],
       "properties": {
-        "timestamp": {
-          "type": "string",
-          "format": "date-time"
-        },
-        "request_id": {
-          "type": "string"
-        },
-        "page": {
-          "type": "integer",
-          "minimum": 1
-        },
-        "limit": {
-          "type": "integer",
-          "minimum": 1
-        },
-        "total_items": {
-          "type": "integer",
-          "minimum": 0
-        },
-        "total_pages": {
-          "type": "integer",
-          "minimum": 0
-        }
+        "timestamp": { "type": "string", "format": "date-time" },
+        "request_id": { "type": "string" },
+        "page": { "type": "integer", "minimum": 1 },
+        "limit": { "type": "integer", "minimum": 1 },
+        "total_items": { "type": "integer", "minimum": 0 },
+        "total_pages": { "type": "integer", "minimum": 0 }
       }
     },
     "ErrorPayload": {
@@ -66,15 +142,23 @@
             "UNAUTHORIZED",
             "FORBIDDEN",
             "NOT_FOUND",
+            "VALIDATION_ERROR",
             "INVALID_ZONE_POLYGON",
             "COOLDOWN_ACTIVE",
-            "INTERNAL_SERVER_ERROR",
-            "AI_MODEL_UNAVAILABLE"
+            "AI_MODEL_UNAVAILABLE",
+            "DUPLICATE_LABEL_NAME",
+            "SYSTEM_LABEL_LOCKED",
+            "LABEL_IN_USE_BY_ZONE",
+            "LABEL_INACTIVE",
+            "SOURCE_NOT_READY",
+            "UNSUPPORTED_MEDIA_TYPE",
+            "UPLOAD_TOO_LARGE",
+            "FRAME_NOT_AVAILABLE",
+            "ZONE_CACHE_REFRESH_FAILED",
+            "INTERNAL_SERVER_ERROR"
           ]
         },
-        "message": {
-          "type": "string"
-        },
+        "message": { "type": "string" },
         "details": {
           "type": "array",
           "items": {
@@ -89,47 +173,31 @@
     },
     "ObjectTypeEnum": {
       "type": "string",
-      "enum": [
-        "container",
-        "truck",
-        "forklift",
-        "crane",
-        "car",
-        "motorbike",
-        "bicycle",
-        "person"
-      ],
-      "description": "8 loại đối tượng/phương tiện được phân loại theo quy tắc CR-001"
+      "enum": ["container", "truck", "forklift", "crane", "car", "motorbike", "bicycle", "person"],
+      "description": "8 loại đối tượng hệ thống; CR-004 custom labels mở rộng zone rules bằng label_key riêng."
     },
     "VehicleTagLabelEnum": {
       "type": "string",
-      "enum": ["known", "unknown"],
-      "description": "Nhãn phân định Xe quen (đã xác thực/hợp lệ) hoặc Xe lạ (chưa ghi nhận/cần chú ý)"
-    },
-    "Camera": {
-      "type": "object",
-      "required": ["id", "name", "location", "stream_url", "status", "fps"],
-      "properties": {
-        "id": {
-          "type": "string",
-          "enum": ["GATE-01", "BAI-KIEM"]
-        },
-        "name": { "type": "string" },
-        "location": { "type": "string" },
-        "stream_url": { "type": "string" },
-        "status": {
-          "type": "string",
-          "enum": ["online", "offline", "degraded"]
-        },
-        "fps": { "type": "number", "minimum": 0 }
-      }
+      "enum": ["known", "unknown"]
     },
     "Point2D": {
       "type": "object",
       "required": ["x", "y"],
       "properties": {
-        "x": { "type": "number", "description": "Tọa độ X tương đối (0.0 - 100.0) trên Canvas SVG" },
-        "y": { "type": "number", "description": "Tọa độ Y tương đối (0.0 - 100.0) trên Canvas SVG" }
+        "x": { "type": "number" },
+        "y": { "type": "number" }
+      }
+    },
+    "Camera": {
+      "type": "object",
+      "required": ["id", "name", "location", "stream_url", "status", "fps"],
+      "properties": {
+        "id": { "type": "string", "enum": ["GATE-01", "BAI-KIEM"] },
+        "name": { "type": "string" },
+        "location": { "type": "string" },
+        "stream_url": { "type": "string" },
+        "status": { "type": "string", "enum": ["online", "offline", "degraded"] },
+        "fps": { "type": "number", "minimum": 0 }
       }
     },
     "Zone": {
@@ -139,45 +207,22 @@
         "id": { "type": "string" },
         "camera_id": { "type": "string", "enum": ["BAI-KIEM", "GATE-01"] },
         "name": { "type": "string" },
-        "vertices": {
-          "type": "array",
-          "items": { "$ref": "#/definitions/Point2D" },
-          "minItems": 3,
-          "description": "Danh sách đỉnh đa giác SVG 4 thao tác (thêm góc, kéo đỉnh, kéo điểm giữa cạnh, kéo thân)"
-        },
-        "allowed_object_types": {
-          "type": "array",
-          "items": { "$ref": "#/definitions/ObjectTypeEnum" },
-          "description": "Danh sách các loại xe/đối tượng ĐƯỢC PHÉP vào zone (Tick ✓)"
-        },
-        "prohibited_object_types": {
-          "type": "array",
-          "items": { "$ref": "#/definitions/ObjectTypeEnum" },
-          "description": "Danh sách các loại xe/đối tượng BỊ CẤM vào zone (Tick ✕)"
-        },
+        "vertices": { "type": "array", "items": { "$ref": "#/definitions/Point2D" }, "minItems": 3 },
+        "allowed_object_types": { "type": "array", "items": { "type": "string" } },
+        "prohibited_object_types": { "type": "array", "items": { "type": "string" } },
         "is_active": { "type": "boolean" },
         "color": { "type": "string", "default": "#EF4444" },
-        "version": {
-          "type": "integer",
-          "minimum": 1,
-          "description": "Version tang dan cua zone record de dong bo voi zone cache runtime"
-        }
+        "version": { "type": "integer", "minimum": 1 }
       }
     },
-    "StreamStatusEnum": {
-      "type": "string",
-      "enum": ["online", "degraded", "offline"]
-    },
+    "StreamStatusEnum": { "type": "string", "enum": ["online", "degraded", "offline"] },
     "ZoneHit": {
       "type": "object",
       "required": ["zone_id", "zone_name", "rule_result"],
       "properties": {
         "zone_id": { "type": "string" },
         "zone_name": { "type": "string" },
-        "rule_result": {
-          "type": "string",
-          "enum": ["allowed", "prohibited", "observed"]
-        }
+        "rule_result": { "type": "string", "enum": ["allowed", "prohibited", "observed"] }
       }
     },
     "AreaDetectedObject": {
@@ -185,195 +230,16 @@
       "required": ["track_id", "object_class", "confidence", "bbox", "center_point", "zone_hits"],
       "properties": {
         "track_id": { "type": "string" },
-        "object_class": { "$ref": "#/definitions/ObjectTypeEnum" },
-        "confidence": { "type": "number", "minimum": 0, "maximum": 1.0 },
-        "bbox": {
-          "type": "array",
-          "items": { "type": "number" },
-          "minItems": 4,
-          "maxItems": 4
-        },
+        "object_class": { "type": "string" },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "bbox": { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4 },
         "center_point": { "$ref": "#/definitions/Point2D" },
-        "zone_hits": {
-          "type": "array",
-          "items": { "$ref": "#/definitions/ZoneHit" }
-        }
-      }
-    },
-    "Vehicle": {
-      "type": "object",
-      "required": ["id", "license_plate", "vehicle_type", "tag_label", "last_seen_at", "total_entries"],
-      "properties": {
-        "id": { "type": "string" },
-        "license_plate": { "type": "string" },
-        "vehicle_type": { "$ref": "#/definitions/ObjectTypeEnum" },
-        "tag_label": { "$ref": "#/definitions/VehicleTagLabelEnum" },
-        "crop_image_url": { "type": "string" },
-        "last_seen_at": { "type": "string", "format": "date-time" },
-        "total_entries": { "type": "integer", "minimum": 0 },
-        "notes": { "type": "string" }
-      }
-    },
-    "Event": {
-      "type": "object",
-      "required": [
-        "id",
-        "timestamp",
-        "camera_id",
-        "event_type",
-        "severity_level",
-        "object_class",
-        "confidence"
-      ],
-      "properties": {
-        "id": { "type": "string" },
-        "timestamp": { "type": "string", "format": "date-time" },
-        "camera_id": { "type": "string" },
-        "zone_id": { "type": "string" },
-        "lane_id": { "type": "string" },
-        "event_type": {
-          "type": "string",
-          "enum": ["LPR_PASSAGE", "ZONE_VIOLATION", "RESTRICTED_ACCESS"]
-        },
-        "severity_level": {
-          "type": "integer",
-          "enum": [1, 2, 3],
-          "description": "1: Green (Xe quen/Hợp lệ), 2: Yellow (Xe lạ/Chú ý), 3: Red (Vi phạm zone cấm)"
-        },
-        "license_plate": { "type": "string" },
-        "vehicle_label": { "$ref": "#/definitions/VehicleTagLabelEnum" },
-        "object_class": { "$ref": "#/definitions/ObjectTypeEnum" },
-        "confidence": { "type": "number", "minimum": 0, "maximum": 1.0 },
-        "bbox": {
-          "type": "array",
-          "items": { "type": "number" },
-          "minItems": 4,
-          "maxItems": 4,
-          "description": "[x_min, y_min, x_max, y_max]"
-        },
-        "crop_image_url": { "type": "string" },
-        "video_clip_url": { "type": "string" }
-      }
-    },
-    "CustomLabel": {
-      "type": "object",
-      "required": ["id", "label_name", "category", "sample_count", "updated_at"],
-      "properties": {
-        "id": { "type": "string" },
-        "label_name": { "type": "string" },
-        "category": { "type": "string", "enum": ["person", "vehicle_shape"] },
-        "sample_count": { "type": "integer", "minimum": 0 },
-        "updated_at": { "type": "string", "format": "date-time" }
-      }
-    },
-    "DatasetSource": {
-      "type": "object",
-      "required": ["id", "name", "kind", "url"],
-      "properties": {
-        "id": { "type": "string" },
-        "name": { "type": "string" },
-        "kind": { "type": "string", "enum": ["img", "video"] },
-        "url": { "type": "string" },
-        "duration_seconds": { "type": "number" },
-        "total_frames": { "type": "integer" }
-      }
-    },
-    "BBoxSample": {
-      "type": "object",
-      "required": ["id", "label_id", "source_id", "x", "y", "w", "h", "category"],
-      "properties": {
-        "id": { "type": "string" },
-        "label_id": { "type": "string" },
-        "source_id": { "type": "string" },
-        "frame_index": { "type": "integer" },
-        "x": { "type": "number", "description": "Tọa độ góc trái X (%)" },
-        "y": { "type": "number", "description": "Tọa độ góc trên Y (%)" },
-        "w": { "type": "number", "description": "Chiều rộng BBox (%)" },
-        "h": { "type": "number", "description": "Chiều cao BBox (%)" },
-        "category": { "type": "string", "enum": ["person", "vehicle_shape"] },
-        "label_name": { "type": "string" },
-        "created_at": { "type": "string", "format": "date-time" }
-      }
-    },
-    "BBoxBatchSaveRequest": {
-      "type": "object",
-      "required": ["samples"],
-      "properties": {
-        "samples": {
-          "type": "array",
-          "items": { "$ref": "#/definitions/BBoxSample" }
-        }
-      }
-    },
-    "DatasetSyncZonesResponse": {
-      "type": "object",
-      "required": ["synced_count", "synced_labels", "affected_zones"],
-      "properties": {
-        "synced_count": { "type": "integer" },
-        "synced_labels": {
-          "type": "array",
-          "items": { "type": "string" }
-        },
-        "affected_zones": { "type": "integer" }
-      }
-    },
-    "ChatbotQueryRequest": {
-      "type": "object",
-      "required": ["query_text"],
-      "properties": {
-        "query_text": { "type": "string" }
-      }
-    },
-    "ChatbotQueryResponse": {
-      "type": "object",
-      "required": ["answer_text", "total_records"],
-      "properties": {
-        "answer_text": { "type": "string" },
-        "total_records": { "type": "integer", "minimum": 0 },
-        "sql_query": { "type": "string" },
-        "evidence_video_url": { "type": "string" },
-        "evidence_event": { "$ref": "#/definitions/Event" },
-        "prompt_chips": {
-          "type": "array",
-          "items": { "type": "string" }
-        }
-      }
-    },
-    "KpiStats": {
-      "type": "object",
-      "required": [
-        "gate_vehicles_total",
-        "gate_lpr_success",
-        "gate_lpr_failed",
-        "gate_avg_confidence",
-        "area_active_objects",
-        "area_zone_violations",
-        "area_active_machinery",
-        "area_total_zones"
-      ],
-      "properties": {
-        "gate_vehicles_total": { "type": "integer", "minimum": 0 },
-        "gate_lpr_success": { "type": "integer", "minimum": 0 },
-        "gate_lpr_failed": { "type": "integer", "minimum": 0 },
-        "gate_avg_confidence": { "type": "number", "minimum": 0, "maximum": 100.0 },
-        "area_active_objects": { "type": "integer", "minimum": 0 },
-        "area_zone_violations": { "type": "integer", "minimum": 0 },
-        "area_active_machinery": { "type": "integer", "minimum": 0 },
-        "area_total_zones": { "type": "integer", "minimum": 0 }
+        "zone_hits": { "type": "array", "items": { "$ref": "#/definitions/ZoneHit" } }
       }
     },
     "AreaFrameMetadata": {
       "type": "object",
-      "required": [
-        "camera_id",
-        "frame_id",
-        "captured_at",
-        "zone_version",
-        "stream_status",
-        "pipeline_latency_ms",
-        "objects",
-        "kpi_delta"
-      ],
+      "required": ["camera_id", "frame_id", "captured_at", "zone_version", "stream_status", "pipeline_latency_ms", "objects", "kpi_delta"],
       "properties": {
         "camera_id": { "type": "string", "enum": ["BAI-KIEM"] },
         "frame_id": { "type": "string" },
@@ -381,18 +247,10 @@
         "zone_version": { "type": "integer", "minimum": 1 },
         "stream_status": { "$ref": "#/definitions/StreamStatusEnum" },
         "pipeline_latency_ms": { "type": "number", "minimum": 0 },
-        "objects": {
-          "type": "array",
-          "items": { "$ref": "#/definitions/AreaDetectedObject" }
-        },
+        "objects": { "type": "array", "items": { "$ref": "#/definitions/AreaDetectedObject" } },
         "kpi_delta": {
           "type": "object",
-          "required": [
-            "area_active_objects",
-            "area_zone_violations",
-            "area_active_machinery",
-            "area_total_zones"
-          ],
+          "required": ["area_active_objects", "area_zone_violations", "area_active_machinery", "area_total_zones"],
           "properties": {
             "area_active_objects": { "type": "integer", "minimum": 0 },
             "area_zone_violations": { "type": "integer", "minimum": 0 },
@@ -401,6 +259,157 @@
           }
         }
       }
-    }
+    },
+    "ObjectLabelCategory": { "type": "string", "enum": ["person", "vehicle_shape", "custom"] },
+    "ObjectLabelType": { "type": "string", "enum": ["system", "custom"] },
+    "ObjectLabel": {
+      "type": "object",
+      "required": ["id", "label_key", "label_name", "label_type", "category", "sample_count", "is_active", "deleted_at", "created_at", "updated_at"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 96 },
+        "label_key": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "label_name": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "label_type": { "$ref": "#/definitions/ObjectLabelType" },
+        "category": { "$ref": "#/definitions/ObjectLabelCategory" },
+        "sample_count": { "type": "integer", "minimum": 0 },
+        "is_active": { "type": "boolean" },
+        "deleted_at": { "oneOf": [{ "type": "string", "format": "date-time" }, { "type": "null" }] },
+        "created_at": { "type": "string", "format": "date-time" },
+        "updated_at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "CreateLabelRequest": {
+      "type": "object",
+      "required": ["label_name", "category"],
+      "properties": {
+        "label_name": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "category": { "type": "string", "enum": ["person", "vehicle_shape"] }
+      }
+    },
+    "UpdateLabelRequest": {
+      "type": "object",
+      "minProperties": 1,
+      "properties": {
+        "label_name": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "category": { "type": "string", "enum": ["person", "vehicle_shape"] }
+      }
+    },
+    "DatasetSourceKind": { "type": "string", "enum": ["img", "video"] },
+    "ImportStatus": { "type": "string", "enum": ["processing", "ready", "failed"] },
+    "DatasetSource": {
+      "type": "object",
+      "required": ["id", "name", "kind", "public_url", "original_filename", "mime_type", "file_size_bytes", "sha256", "duration_seconds", "total_frames", "fps", "width", "height", "import_status", "import_error", "created_at", "updated_at"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 96 },
+        "name": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "kind": { "$ref": "#/definitions/DatasetSourceKind" },
+        "public_url": { "type": "string", "minLength": 1 },
+        "original_filename": { "type": "string", "minLength": 1, "maxLength": 255 },
+        "mime_type": { "type": "string", "enum": ["image/jpeg", "image/png", "video/mp4", "video/quicktime"] },
+        "file_size_bytes": { "type": "integer", "minimum": 1 },
+        "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "duration_seconds": { "oneOf": [{ "type": "number", "minimum": 0 }, { "type": "null" }] },
+        "total_frames": { "oneOf": [{ "type": "integer", "minimum": 0 }, { "type": "null" }] },
+        "fps": { "oneOf": [{ "type": "number", "exclusiveMinimum": 0 }, { "type": "null" }] },
+        "width": { "oneOf": [{ "type": "integer", "minimum": 1 }, { "type": "null" }] },
+        "height": { "oneOf": [{ "type": "integer", "minimum": 1 }, { "type": "null" }] },
+        "import_status": { "$ref": "#/definitions/ImportStatus" },
+        "import_error": { "oneOf": [{ "type": "string" }, { "type": "null" }] },
+        "created_at": { "type": "string", "format": "date-time" },
+        "updated_at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "BBoxPercent": {
+      "type": "object",
+      "required": ["x", "y", "w", "h"],
+      "properties": {
+        "x": { "type": "number", "minimum": 0, "maximum": 100 },
+        "y": { "type": "number", "minimum": 0, "maximum": 100 },
+        "w": { "type": "number", "exclusiveMinimum": 0, "maximum": 100 },
+        "h": { "type": "number", "exclusiveMinimum": 0, "maximum": 100 }
+      }
+    },
+    "BBoxSampleLabelSummary": {
+      "type": "object",
+      "required": ["id", "label_key", "label_name"],
+      "properties": {
+        "id": { "type": "string" },
+        "label_key": { "type": "string" },
+        "label_name": { "type": "string" }
+      }
+    },
+    "BBoxSample": {
+      "type": "object",
+      "required": ["id", "label_id", "source_id", "frame_index", "frame_timestamp_seconds", "bbox", "coordinate_space", "label", "created_at", "updated_at"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 96 },
+        "label_id": { "type": "string", "minLength": 1, "maxLength": 96 },
+        "source_id": { "type": "string", "minLength": 1, "maxLength": 96 },
+        "frame_index": { "oneOf": [{ "type": "integer", "minimum": 0 }, { "type": "null" }] },
+        "frame_timestamp_seconds": { "oneOf": [{ "type": "number", "minimum": 0 }, { "type": "null" }] },
+        "bbox": { "$ref": "#/definitions/BBoxPercent" },
+        "coordinate_space": { "type": "string", "enum": ["percent_0_100"] },
+        "label": { "$ref": "#/definitions/BBoxSampleLabelSummary" },
+        "created_at": { "type": "string", "format": "date-time" },
+        "updated_at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "CreateBBoxSampleItem": {
+      "type": "object",
+      "required": ["label_id", "source_id", "bbox"],
+      "properties": {
+        "label_id": { "type": "string", "minLength": 1, "maxLength": 96 },
+        "source_id": { "type": "string", "minLength": 1, "maxLength": 96 },
+        "frame_index": { "oneOf": [{ "type": "integer", "minimum": 0 }, { "type": "null" }] },
+        "frame_timestamp_seconds": { "oneOf": [{ "type": "number", "minimum": 0 }, { "type": "null" }] },
+        "bbox": { "$ref": "#/definitions/BBoxPercent" }
+      }
+    },
+    "BatchCreateSamplesRequest": {
+      "type": "object",
+      "required": ["samples"],
+      "properties": {
+        "samples": { "type": "array", "minItems": 1, "maxItems": 200, "items": { "$ref": "#/definitions/CreateBBoxSampleItem" } }
+      }
+    },
+    "UpdateBBoxSampleRequest": {
+      "type": "object",
+      "minProperties": 1,
+      "properties": {
+        "label_id": { "type": "string", "minLength": 1, "maxLength": 96 },
+        "frame_index": { "oneOf": [{ "type": "integer", "minimum": 0 }, { "type": "null" }] },
+        "frame_timestamp_seconds": { "oneOf": [{ "type": "number", "minimum": 0 }, { "type": "null" }] },
+        "bbox": { "$ref": "#/definitions/BBoxPercent" }
+      }
+    },
+    "ZoneCacheInfo": {
+      "type": "object",
+      "required": ["camera_id", "zone_version", "cache_status", "refreshed_at"],
+      "properties": {
+        "camera_id": { "type": "string" },
+        "zone_version": { "type": "integer", "minimum": 1 },
+        "cache_status": { "type": "string", "enum": ["hot", "refreshing"] },
+        "refreshed_at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "ZoneSyncResult": {
+      "type": "object",
+      "required": ["synced_labels", "affected_zones", "default_rule", "cache"],
+      "properties": {
+        "synced_labels": { "type": "array", "items": { "type": "string" } },
+        "affected_zones": { "type": "array", "items": { "type": "string" } },
+        "default_rule": { "type": "string", "enum": ["forbidden"] },
+        "cache": { "type": "array", "items": { "$ref": "#/definitions/ZoneCacheInfo" } }
+      }
+    },
+    "LabelListEnvelope": { "allOf": [{ "$ref": "#/definitions/ResponseEnvelope" }] },
+    "LabelMutationEnvelope": { "allOf": [{ "$ref": "#/definitions/ResponseEnvelope" }] },
+    "LabelDeleteEnvelope": { "allOf": [{ "$ref": "#/definitions/ResponseEnvelope" }] },
+    "SourceListEnvelope": { "allOf": [{ "$ref": "#/definitions/ResponseEnvelope" }] },
+    "SourceEnvelope": { "allOf": [{ "$ref": "#/definitions/ResponseEnvelope" }] },
+    "SampleListEnvelope": { "allOf": [{ "$ref": "#/definitions/ResponseEnvelope" }] },
+    "BatchCreateSamplesEnvelope": { "allOf": [{ "$ref": "#/definitions/ResponseEnvelope" }] },
+    "SampleMutationEnvelope": { "allOf": [{ "$ref": "#/definitions/ResponseEnvelope" }] },
+    "SyncZonesEnvelope": { "allOf": [{ "$ref": "#/definitions/ResponseEnvelope" }] }
   }
 }

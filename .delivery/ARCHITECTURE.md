@@ -1,9 +1,9 @@
 ---
 artifact: ARCHITECTURE.md
-version: 1.2.0
+version: 1.2.1
 owner: design-architecture
 status: approved
-updated_at: "2026-08-20T18:10:00+07:00"
+updated_at: "2026-08-24T19:10:16+07:00"
 ---
 
 # Kiến trúc Kỹ thuật Hệ thống Giám sát Camera AI (SentriAI Mini)
@@ -182,9 +182,11 @@ Các quyết định kiến trúc:
 - [ADR-002: Thuật toán Ray-Casting kiểm tra Tâm BBox trong Zone Đa giác](file:///d:/Hilab/Project34/.delivery/ADR/ADR-002-point-in-polygon-zone-evaluation.md)
 - [ADR-003: Cơ chế Cửa sổ Thời gian Cooldown Lọc Trùng lặp Sự kiện](file:///d:/Hilab/Project34/.delivery/ADR/ADR-003-event-cooldown-deduplication.md)
 - [ADR-004: Kiến trúc Hỏi đáp AI Text-to-SQL kết hợp Fallback Rule-based Engine](file:///d:/Hilab/Project34/.delivery/ADR/ADR-004-llm-text-to-sql-with-fallback.md)
+- **CR-001 Audit**: Chuẩn hóa baseline nghiệp vụ cho phân loại 8 nhóm đối tượng, polygon zone rules, whitelist/dataset nền tảng và công cụ BBox Dataset Tool ở các module `web-ui`, `api-gateway`, `database-storage`, `ai-vision-pipeline`.
 - **CR-002 Audit**: Đổi stack phân hệ `web-ui` từ Vanilla JS sang React Framework (Vite/Next.js + Tailwind CSS + Lucide Icons + Recharts + SVG Canvas) và nâng cấp model `ai-vision-pipeline` sang Ultralytics YOLOv26.
 - **CR-003 Audit**: Cập nhật mô hình phân hệ Area Zone Monitoring sang **Ultralytics YOLO-World v2** (`yolov8s-worldv2.pt` Open-Vocabulary Detection) kết hợp 2 luồng Video Stream (`BAI-KIEM.mp4` 10s & `XUONG-AN-NINH.mp4` 4m32s), giữ nguyên YOLOv8 + EasyOCR cho Gate LPR Monitoring (`GATE-01`).
 - **CR-003 (Change Request) Audit**: Bổ sung `area-metadata-publisher` và `zone-cache` để tách `video stream lane`, `realtime metadata lane`, `event/alert lane`; cấm DB read trong hot path xử lý từng frame của Area Dashboard.
+- **CR-004 Audit**: Chuyển `Cài đặt > Nhãn đối tượng` sang flow dữ liệu thật ở các module `web-ui`, `api-gateway`, `database-storage`, `zone-cache`: import media được lưu, bbox samples persisted, nhãn hệ thống bị khóa sửa/xóa, nhãn custom có soft delete/restore và tự động sync vào zone rules mặc định `cấm`.
 
 ---
 
@@ -198,6 +200,6 @@ Các quyết định kiến trúc:
 | **REQ-004** (Deduplication) | `event-clip-manager`, `area-metadata-publisher`, `web-ui` | In-Memory Sliding Window Cooldown Cache + Metadata/Event Lane Split | ADR-003, CR-002, CR-003 |
 | **REQ-005** (Polygon Zone UI) | `web-ui`, `api-gateway`, `zone-cache` | React SVG Canvas Interactive Draw + API Zone Route + Cache Invalidation | ADR-002, CR-002, CR-003 |
 | **REQ-006** (Vehicle Tag) | `api-gateway`, `database-storage`, `web-ui` | React Data Table + Whitelist/Blacklist API | ADR-001, CR-002 |
-| **REQ-007** (Custom Label Tool) | `web-ui`, `api-gateway`, `ai-vision-pipeline` | Timeline Scrubber + YOLOv26 Custom Dataset Manager | ADR-001, CR-002 |
+| **REQ-007** (Custom Label Tool) | `web-ui`, `api-gateway`, `database-storage`, `ai-vision-pipeline` | Timeline Scrubber + Custom Dataset Manager + persisted media/samples | ADR-001, CR-001, CR-002, CR-004 |
 | **REQ-008** (AI Assistant Q&A) | `llm-qa-agent`, `database-storage`, `web-ui` | Text-to-SQL + Fallback Engine + React VideoModal 10s | ADR-004, CR-002 |
 | **REQ-009** (Multi-channel Alert) | `event-clip-manager`, `alert-dispatcher`, `web-ui` | Derived Level-3 Alert Lane + React AudioBeepPlayer + Telegram Bot | ADR-001, CR-002, CR-003 |

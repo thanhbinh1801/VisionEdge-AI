@@ -129,6 +129,7 @@ interface AppContextType {
   renameObjLabel: (id: string, name: string) => void;
   deleteObjLabel: (id: string) => void;
   zonesByCam: Record<string, ZoneConfig[]>;
+  refreshZones: () => Promise<ZoneConfig[]>;
   updateZone: (camId: string, zoneId: string, patch: Partial<ZoneConfig>) => void;
   addZone: (camId: string, zone: ZoneConfig) => void;
   deleteZone: (camId: string, zoneId: string) => void;
@@ -170,18 +171,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return () => clearInterval(interval);
   }, []);
 
-  useEffect(() => {
-    fetchZones().then((fetchedZones) => {
-      if (fetchedZones && fetchedZones.length > 0) {
-        const grouped: Record<string, ZoneConfig[]> = {};
-        fetchedZones.forEach((z) => {
-          const cam = z.camera_id || 'BAI-KIEM';
-          if (!grouped[cam]) grouped[cam] = [];
-          grouped[cam].push(z);
-        });
-        setZonesByCam((prev) => ({ ...prev, ...grouped }));
-      }
+  const applyFetchedZones = (fetchedZones: ZoneConfig[]) => {
+    if (fetchedZones.length === 0) return;
+    const grouped: Record<string, ZoneConfig[]> = {};
+    fetchedZones.forEach((z) => {
+      const cam = z.camera_id || 'BAI-KIEM';
+      if (!grouped[cam]) grouped[cam] = [];
+      grouped[cam].push(z);
     });
+    setZonesByCam((prev) => ({ ...prev, ...grouped }));
+  };
+
+  const refreshZones = async () => {
+    const fetchedZones = await fetchZones();
+    applyFetchedZones(fetchedZones);
+    return fetchedZones;
+  };
+
+  useEffect(() => {
+    refreshZones();
   }, []);
 
 
@@ -393,6 +401,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         renameObjLabel,
         deleteObjLabel,
         zonesByCam,
+        refreshZones,
         updateZone,
         addZone,
         deleteZone,
