@@ -31,16 +31,27 @@ data/crops/*
 !data/crops/.gitkeep
 data/test_clips/
 
+# Bộ dữ liệu ảnh/video demo: nặng và không thuộc lịch sử mã nguồn.
+# Giữ lại cây thư mục để các đường dẫn cấu hình vẫn tồn tại.
+data/**
+!data/
+!data/*/
+
 # Node / Frontend (if applicable)
 node_modules/
 dist/
 build/
+# Log build dán tay, không phải sản phẩm của quy trình build.
+build-output.log
 
 # IDE & OS
 .vscode/
 .idea/
 .DS_Store
 Thumbs.db
+# Resource fork của macOS, sinh ra khi giải nén zip trên máy Mac.
+__MACOSX/
+._*
 .claude/skills/
 
 # AI Model Weights & Video files
