@@ -21,6 +21,10 @@ htmlcov/
 # Databases & Media storage
 *.db
 *.sqlite3
+# SQLite WAL sidecars: nội dung thay đổi liên tục khi có tiến trình đang giữ DB,
+# commit chúng chỉ tạo xung đột nhị phân ở mỗi lần pull.
+*.db-shm
+*.db-wal
 data/clips/*
 !data/clips/.gitkeep
 data/crops/*
