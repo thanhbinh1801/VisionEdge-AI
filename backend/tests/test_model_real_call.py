@@ -1,5 +1,4 @@
 import os
-import pytest
 from backend.app.services.vision_pipeline import AIVisionPipeline
 from backend.app.services.video_stream import VideoStreamService
 
