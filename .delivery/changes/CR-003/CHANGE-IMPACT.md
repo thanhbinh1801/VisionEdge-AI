@@ -2,7 +2,7 @@
 artifact: CHANGE-IMPACT.md
 version: "1.0"
 owner: assess-change-impact
-status: in-review
+status: approved
 updated_at: "2026-08-20T17:25:00+07:00"
 change_id: CR-003
 depends_on: [REQUIREMENTS.md, ARCHITECTURE.md, API-CONTRACT.md, MASTER-PLAN.md]
@@ -113,4 +113,3 @@ Những task/hop dong chịu tác động trực tiếp bởi CR-003:
 - Review traceability từ `CR-003` sang `REQ-002`, `REQ-004`, `REQ-005`, `REQ-009`.
 - Kiểm tra contract draft có tach rõ `video stream`, `metadata stream`, `event stream`.
 - Kiểm tra task mới không overwrite task cũ và không sua `MASTER-PLAN.md`.
-

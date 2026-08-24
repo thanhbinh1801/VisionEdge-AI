@@ -1,7 +1,9 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { useApp } from '../context/AppContext';
 import { usePolygonEditor } from '../hooks/usePolygonEditor';
-import { fetchZoneFrame, VideoFrameMetadata } from '../services/api';
+import { fetchDatasetLabels, fetchZoneFrame, updateZoneApi, VideoFrameMetadata } from '../services/api';
+import { ObjectLabelingTab } from '../components/zone/ObjectLabelingTab';
+import { ObjectLabel as DatasetObjectLabel } from '../contracts/api/dataset.schema';
 
 const formatTimestamp = (seconds: number) => {
   const safeSeconds = Math.max(0, Math.round(seconds));
@@ -17,6 +19,7 @@ export const ZoneTagSettings: React.FC = () => {
     vehicles,
     toggleVehicleTag,
     zonesByCam,
+    refreshZones,
     updateZone,
     addZone,
     deleteZone,
@@ -34,6 +37,7 @@ export const ZoneTagSettings: React.FC = () => {
     saveAnnSamples,
     clock,
   } = useApp();
+  void toggleZoneType;
 
   // Sub-tab 2 (Zone Editor) State
   const [camSel, setCamSel] = useState<string>('BAI-KIEM');
@@ -46,9 +50,61 @@ export const ZoneTagSettings: React.FC = () => {
   const [zoneFrameDraft, setZoneFrameDraft] = useState(0);
   const [zoneFrameMeta, setZoneFrameMeta] = useState<VideoFrameMetadata | null>(null);
   const [zoneFrameRetry, setZoneFrameRetry] = useState(0);
+  const [zoneRuleLabels, setZoneRuleLabels] = useState<DatasetObjectLabel[]>([]);
+  const [zoneRuleLabelsStatus, setZoneRuleLabelsStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
+  const [zoneRuleLabelsError, setZoneRuleLabelsError] = useState('');
 
 
   const curCamZones = zonesByCam[camSel] || [];
+
+  const cleanupUnselectedCustomLabels = async (labels: DatasetObjectLabel[]) => {
+    const activeCustomKeys = new Set(
+      labels
+        .filter((label) => label.is_active && label.label_type === 'custom')
+        .map((label) => label.label_key),
+    );
+    if (activeCustomKeys.size === 0) return false;
+
+    const latestZones = await refreshZones();
+    const cleanupTargets = latestZones
+      .map((zone) => {
+        const allowed = new Set(zone.allowed_classes || []);
+        const forbidden = zone.forbidden_classes || [];
+        const nextForbidden = forbidden.filter((key) => !activeCustomKeys.has(key) || allowed.has(key));
+        return { zone, nextForbidden, changed: nextForbidden.length !== forbidden.length };
+      })
+      .filter((target) => target.changed);
+
+    if (cleanupTargets.length === 0) return false;
+
+    await Promise.all(
+      cleanupTargets.map(({ zone, nextForbidden }) =>
+        updateZoneApi(zone.id, {
+          allowed_classes: zone.allowed_classes || [],
+          forbidden_classes: nextForbidden,
+        }),
+      ),
+    );
+    await refreshZones();
+    return true;
+  };
+
+  const loadZoneRuleLabels = () => {
+    setZoneRuleLabelsStatus('loading');
+    setZoneRuleLabelsError('');
+    fetchDatasetLabels(false)
+      .then(async (labels) => {
+        const activeLabels = labels.filter((label) => label.is_active);
+        await cleanupUnselectedCustomLabels(activeLabels);
+        setZoneRuleLabels(activeLabels);
+        setZoneRuleLabelsStatus('success');
+      })
+      .catch((error: unknown) => {
+        setZoneRuleLabels([]);
+        setZoneRuleLabelsStatus('error');
+        setZoneRuleLabelsError(error instanceof Error ? error.message : 'Không tải được nhãn đối tượng từ backend.');
+      });
+  };
 
   useEffect(() => {
     let active = true;
@@ -79,6 +135,12 @@ export const ZoneTagSettings: React.FC = () => {
     setZoneFrameMeta(null);
   }, [camSel]);
 
+  useEffect(() => {
+    if (subTab === 'zone') {
+      loadZoneRuleLabels();
+    }
+  }, [subTab]);
+
   const retryZoneFrame = () => {
     setZoneFrameError('');
     setZoneFrameStatus('loading');
@@ -104,6 +166,40 @@ export const ZoneTagSettings: React.FC = () => {
     (newZ) => addZone(camSel, newZ)
   );
 
+  const isZoneLabelAllowed = (zone: typeof curCamZones[number], label: DatasetObjectLabel) => {
+    const key = label.label_key;
+    return Boolean(
+      zone.allowed_classes?.includes(key) ||
+      zone.types[key] ||
+      zone.types[label.label_name]
+    );
+  };
+
+  const toggleZoneRuleLabel = (zone: typeof curCamZones[number], label: DatasetObjectLabel) => {
+    const key = label.label_key;
+    const allowed = new Set(zone.allowed_classes || []);
+    const forbidden = new Set(zone.forbidden_classes || []);
+    const nextAllowed = !isZoneLabelAllowed(zone, label);
+
+    if (nextAllowed) {
+      allowed.add(key);
+      forbidden.delete(key);
+    } else {
+      allowed.delete(key);
+      forbidden.delete(key);
+    }
+
+    updateZone(camSel, zone.id, {
+      allowed_classes: Array.from(allowed),
+      forbidden_classes: Array.from(forbidden),
+      types: {
+        ...zone.types,
+        [key]: nextAllowed ? 1 : 0,
+        [label.label_name]: nextAllowed ? 1 : 0,
+      },
+    });
+  };
+
   // Sub-tab 3 (Object Labeler) State
   const [nlName, setNlName] = useState<string>('');
   const [nlKind, setNlKind] = useState<'nguoi' | 'xe'>('xe');
@@ -112,7 +208,7 @@ export const ZoneTagSettings: React.FC = () => {
   const [vidFrame, setVidFrame] = useState<number>(1);
   const [savedMsg, setSavedMsg] = useState<string>('');
   const [annPick, setAnnPick] = useState<string | null>(null); // Selected sample ID on canvas
-  const [annDraft, setAnnDraft] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
+  const [annDraft, setAnnDraft] = useState<any>(null);
   const [annFrameDraft, setAnnFrameDraft] = useState(1);
   const [annFrameSrc, setAnnFrameSrc] = useState('');
   const [annFrameMeta, setAnnFrameMeta] = useState<VideoFrameMetadata | null>(null);
@@ -273,8 +369,8 @@ export const ZoneTagSettings: React.FC = () => {
   );
 
   const pendingCount = annSamples.filter((s) => s.session).length;
-  const pickedSample = annSamples.find((s) => s.id === annPick) || null;
-  const activeLabelObj = objLabels.find((o) => o.id === annSel) || null;
+  const pickedSample = annSamples.find((s) => s.id === annPick) as any;
+  const activeLabelObj = objLabels.find((o) => o.id === annSel) as any;
 
   const labelColors: Record<string, string> = {
     l1: '#39e0d0',
@@ -982,21 +1078,56 @@ export const ZoneTagSettings: React.FC = () => {
 
 
                   <div style={{ fontSize: '10.5px', color: 'var(--ink3)', marginBottom: '8px' }}>
-                    Chọn loại xe được phép vào zone (bấm để đổi ✓ được phép / ✕ cấm)
+                    Chọn nhãn đối tượng được phép vào zone (bấm để đổi ✓ được phép / ✕ cấm)
                   </div>
 
                   <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-                    {objLabels.map((o) => {
-                      const isAllowed = !!z.types[o.name];
+                    {zoneRuleLabelsStatus === 'loading' && (
+                      <span style={{ fontSize: '11px', color: 'var(--ink3)' }}>
+                        Đang tải nhãn từ backend...
+                      </span>
+                    )}
+                    {zoneRuleLabelsStatus === 'error' && (
+                      <span role="alert" style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '11px', color: 'var(--p0)' }}>
+                        {zoneRuleLabelsError}
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            loadZoneRuleLabels();
+                          }}
+                          style={{
+                            fontSize: '10.5px',
+                            fontWeight: 600,
+                            padding: '3px 8px',
+                            borderRadius: '6px',
+                            border: '1px solid var(--line2)',
+                            background: 'transparent',
+                            color: 'var(--ink)',
+                            cursor: 'pointer',
+                            fontFamily: 'inherit',
+                          }}
+                        >
+                          Tải lại
+                        </button>
+                      </span>
+                    )}
+                    {zoneRuleLabelsStatus === 'success' && zoneRuleLabels.length === 0 && (
+                      <span style={{ fontSize: '11px', color: 'var(--ink3)' }}>
+                        Backend chưa trả về nhãn đối tượng active.
+                      </span>
+                    )}
+                    {zoneRuleLabelsStatus === 'success' && zoneRuleLabels.map((label) => {
+                      const isAllowed = isZoneLabelAllowed(z, label);
                       const btnBg = isAllowed ? 'var(--okq)' : 'var(--p0q)';
                       const btnFg = isAllowed ? 'var(--ok)' : 'var(--p0)';
                       const btnBorder = isAllowed ? 'var(--ok)' : 'rgba(255,69,58,.4)';
                       return (
                         <button
-                          key={o.id}
+                          key={label.id}
                           onClick={(e) => {
                             e.stopPropagation();
-                            toggleZoneType(camSel, z.id, o.name);
+                            toggleZoneRuleLabel(z, label);
                           }}
                           style={{
                             fontSize: '11px',
@@ -1011,7 +1142,7 @@ export const ZoneTagSettings: React.FC = () => {
                           }}
                         >
                           {isAllowed ? '✓ ' : '✕ '}
-                          {o.name}
+                          {label.label_name}
                         </button>
                       );
                     })}
@@ -1027,8 +1158,10 @@ export const ZoneTagSettings: React.FC = () => {
         </div>
       )}
 
-      {/* ==================== SUB-TAB 3: NHÃN ĐỐI TƯỢNG ==================== */}
-      {subTab === 'obj' && (
+      {subTab === 'obj' && <ObjectLabelingTab />}
+
+      {/* ==================== SUB-TAB 3: NHÃN ĐỐI TƯỢNG LEGACY MOCK (disabled by TASK-024) ==================== */}
+      {false && subTab === 'obj' && (
         <div style={{ display: 'grid', gridTemplateColumns: '1.5fr 1fr', gap: '16px', marginBottom: '16px' }}>
           {/* Left Column: Bounding Box Dataset Collector */}
           <div>

@@ -112,14 +112,24 @@ class CustomLabel(Base):
     __tablename__ = "custom_labels"
 
     id = Column(String(64), primary_key=True)
-    label_name = Column(String(128), nullable=False, unique=True)
+    label_key = Column(String(128), nullable=True, unique=True)
+    label_name = Column(String(128), nullable=False)
+    label_type = Column(String(16), nullable=False, default="custom")
     category = Column(String(64), nullable=False, default="custom")
     sample_count = Column(Integer, nullable=False, default=0)
+    is_active = Column(Boolean, nullable=False, default=True)
+    deleted_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     updated_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 
+    samples = relationship("BBoxSample", back_populates="label")
+
     __table_args__ = (
         CheckConstraint("sample_count >= 0", name="check_custom_label_sample_count"),
+        CheckConstraint("label_type IN ('system', 'custom')", name="check_custom_label_type"),
+        CheckConstraint("category IN ('person', 'vehicle_shape', 'custom')", name="check_custom_label_category"),
+        Index("idx_object_labels_label_key", "label_key", unique=True),
+        Index("idx_object_labels_active_type_key", "is_active", "label_type", "label_key"),
     )
 
 class DatasetSource(Base):
@@ -128,38 +138,67 @@ class DatasetSource(Base):
     id = Column(String(64), primary_key=True)
     name = Column(String(128), nullable=False)
     kind = Column(String(16), nullable=False)  # 'img' | 'video'
-    url = Column(String(512), nullable=False)
+    url = Column(String(512), nullable=True)
+    storage_path = Column(String(512), nullable=True)
+    public_url = Column(String(512), nullable=True)
+    original_filename = Column(String(255), nullable=True)
+    mime_type = Column(String(128), nullable=True)
+    file_size_bytes = Column(Integer, nullable=True)
+    sha256 = Column(String(64), nullable=True)
     duration_seconds = Column(Float, nullable=True)
     total_frames = Column(Integer, nullable=True)
+    fps = Column(Float, nullable=True)
+    width = Column(Integer, nullable=True)
+    height = Column(Integer, nullable=True)
+    import_status = Column(String(32), nullable=False, default="ready")
+    import_error = Column(Text, nullable=True)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 
     samples = relationship("BBoxSample", back_populates="source", cascade="all, delete-orphan")
 
     __table_args__ = (
         CheckConstraint("kind IN ('img', 'video')", name="check_dataset_source_kind"),
+        CheckConstraint("import_status IN ('processing', 'ready', 'failed')", name="check_dataset_source_import_status"),
+        Index("idx_dataset_sources_created_at", created_at.desc()),
+        Index("idx_dataset_sources_sha256", "sha256"),
     )
 
 class BBoxSample(Base):
     __tablename__ = "bbox_samples"
 
     id = Column(String(64), primary_key=True)
-    label_id = Column(String(64), nullable=False)
+    label_id = Column(String(64), ForeignKey("custom_labels.id"), nullable=False)
     source_id = Column(String(64), ForeignKey("dataset_sources.id", ondelete="CASCADE"), nullable=False)
     frame_index = Column(Integer, nullable=True)
+    frame_timestamp_seconds = Column(Float, nullable=True)
     x = Column(Float, nullable=False)
     y = Column(Float, nullable=False)
     w = Column(Float, nullable=False)
     h = Column(Float, nullable=False)
-    category = Column(String(32), nullable=False)
-    label_name = Column(String(128), nullable=False)
+    coordinate_space = Column(String(32), nullable=False, default="percent_0_100")
+    category = Column(String(32), nullable=True)
+    label_name = Column(String(128), nullable=True)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 
     source = relationship("DatasetSource", back_populates="samples")
+    label = relationship("CustomLabel", back_populates="samples")
 
     __table_args__ = (
-        CheckConstraint("category IN ('person', 'vehicle_shape')", name="check_bbox_sample_category"),
+        CheckConstraint("category IN ('person', 'vehicle_shape', 'custom')", name="check_bbox_sample_category"),
+        CheckConstraint("coordinate_space = 'percent_0_100'", name="check_bbox_coordinate_space"),
+        CheckConstraint("frame_index IS NULL OR frame_index >= 0", name="check_bbox_frame_index"),
+        CheckConstraint("frame_timestamp_seconds IS NULL OR frame_timestamp_seconds >= 0", name="check_bbox_frame_timestamp"),
+        CheckConstraint("x >= 0 AND x <= 100", name="check_bbox_x"),
+        CheckConstraint("y >= 0 AND y <= 100", name="check_bbox_y"),
+        CheckConstraint("w > 0 AND w <= 100", name="check_bbox_w"),
+        CheckConstraint("h > 0 AND h <= 100", name="check_bbox_h"),
+        CheckConstraint("x + w <= 100", name="check_bbox_x_extent"),
+        CheckConstraint("y + h <= 100", name="check_bbox_y_extent"),
         Index("idx_bbox_samples_label", "label_id"),
         Index("idx_bbox_samples_source", "source_id"),
+        Index("idx_bbox_samples_source_frame", "source_id", "frame_index", created_at.desc()),
     )
 
 class KpiRealtimeCache(Base):

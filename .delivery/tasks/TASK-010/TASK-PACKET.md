@@ -29,3 +29,55 @@ depends_on: [REQUIREMENTS.md, ARCHITECTURE.md, TASK-007, TASK-008]
 ## Ghi chú tái dựng
 
 This packet was restored because `.delivery/tasks/TASK-010/TASK-PACKET.md` was missing while `TASK-RESULT.md` still exists.
+
+## Execution Brief
+
+### Objective
+Implement or preserve the baseline Area Security Dashboard for BAI-KIEM stream monitoring, zone-rule context, and backend-annotated visual output.
+
+### Source-of-truth artifacts to read
+- `.delivery/tasks/TASK-010/TASK-PACKET.md`
+- `.delivery/tasks/TASK-010/TASK-RESULT.md`
+- `.delivery/tasks/TASK-007/TASK-RESULT.md`
+- `.delivery/tasks/TASK-008/TASK-RESULT.md`
+- `docs/contracts/API-FOUNDATION.md` or `.delivery/API-CONTRACT.md`
+- `docs/contracts/UI-UX-FOUNDATION.md` if present
+- `frontend/src/pages/AreaSecurityDashboard.tsx`
+- `frontend/src/services/api.ts`
+- `.delivery/MASTER-PLAN.md` section `TASK-010 Triển khai Tab 2 — Area Security Dashboard (Bãi kiểm)`
+
+### Allowed write scope
+- Historical task scope: `frontend/src/pages/AreaSecurityDashboard.tsx`.
+- Current packet-normalization scope: only `.delivery/tasks/TASK-010/TASK-PACKET.md`.
+
+### Forbidden scope
+- Do not edit `.delivery/MASTER-PLAN.md`, `.delivery/tasks/TASK-010/TASK-RESULT.md`, backend code, unrelated frontend pages/components, bug/test-report artifacts, or unrelated delivery artifacts.
+
+### Acceptance criteria
+- Packet remains consistent with task id `TASK-010`, capability `frontend-implementation`, dependencies `TASK-007`, `TASK-008`, linked requirements, expected output, and completion gate.
+- Area Dashboard renders BAI-KIEM stream and displays zone-rule monitoring context for approved object classes.
+- Backend annotated MJPEG remains the baseline visual source of truth, consistent with the restored packet note.
+
+### Edge cases / risks
+- Packet was reconstructed from existing TASK-RESULT and master-plan data.
+- Later CR-003 work changes realtime metadata behavior and must not be back-applied as if it happened during TASK-010.
+- Not specified in source artifacts: original UI screenshot, exact KPI list, browser matrix, and original manual QA notes.
+
+### Verification commands or validation method
+- Planned verification command from MASTER-PLAN: `npm --prefix frontend run build`.
+- Validate against existing TASK-RESULT evidence if present; otherwise mark missing historical evidence clearly.
+
+### Escalation conditions
+- Escalate before requiring backend changes, approved contract changes, or edits outside frontend Area Dashboard scope plus task artifacts.
+
+### Expected TASK-RESULT format
+- Status/outcome.
+- Inputs used.
+- Outputs created.
+- Implementation summary.
+- Verification evidence.
+- Deviations, including reconstruction notes.
+- Blockers and scope-change requests.
+
+### Skill/capability to run
+- `frontend-implementation`.

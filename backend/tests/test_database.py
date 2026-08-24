@@ -158,11 +158,16 @@ def test_dataset_bbox_samples_and_zone_sync(db_session):
     ))
     assert src.id == "src-video-01"
 
+    label = CustomLabelRepository(db_session).create_custom(
+        label_name="container_20ft_custom",
+        category="vehicle_shape",
+    )
+
     # Batch save BBox annotation samples
     samples_payload = [
         {
             "id": "bbox-sample-01",
-            "label_id": "lbl-container-khac",
+            "label_id": label.id,
             "source_id": "src-video-01",
             "frame_index": 45,
             "x": 20.5,
@@ -179,9 +184,9 @@ def test_dataset_bbox_samples_and_zone_sync(db_session):
 
     # Sync custom labels to zones
     sync_res = dataset_repo.sync_custom_labels_to_zones()
-    assert sync_res["synced_count"] >= 1
-    assert "container_20ft_custom" in sync_res["synced_labels"]
-    assert sync_res["affected_zones"] >= 1
+    assert "container_20ft_custom" in [label.label_name for label in CustomLabelRepository(db_session).get_all(include_deleted=True)]
+    assert label.label_key in sync_res["synced_labels"]
+    assert len(sync_res["affected_zones"]) >= 1
 
 def test_kpi_repository(db_session):
     repo = KpiRepository(db_session)

@@ -3,7 +3,7 @@ artifact: REQUIREMENTS.md
 version: 1.5.0
 owner: collect-requirements
 status: approved
-updated_at: 2026-08-20T18:10:00+07:00
+updated_at: 2026-08-24T19:08:31+07:00
 ---
 
 Discovery status: confirmed
@@ -45,6 +45,16 @@ Hệ thống cung cấp giải pháp giám sát an ninh camera AI tự động c
 - Affected requirement IDs: `REQ-002`, `REQ-004`, `REQ-005`, `REQ-009`
 - Previous meaning: UI khu vực có thể dựa vào event feed/polling để phản ánh trạng thái gần realtime; cooldown event và metadata frame-to-frame chưa được tách nghĩa rõ; zone update chỉ được mô tả ở mức "cập nhật xuống AI pipeline" mà chưa ràng buộc cache/invalidation runtime.
 - Source: Change request CR-003, `.delivery/changes/CR-003/CHANGE-IMPACT.md`
+- Status: active
+
+---
+
+## CR-004 Real Object Labeling Flow in Settings
+
+- Business delta: Chuyển chức năng `Nhãn đối tượng` trong tab `Cài đặt` từ mock/local state sang flow dữ liệu thật: import ảnh/video được backend lưu file và metadata để tải lại; chọn frame video bằng timeline scrubber; vẽ, lưu, sửa và xóa bbox samples trong DB; quản lý nhãn custom với tạo, sửa tên, soft delete và restore; tự động đồng bộ nhãn custom vào danh sách loại đối tượng của mọi zone với trạng thái mặc định là `cấm`. 8 loại đối tượng mặc định là nhãn hệ thống bị khóa sửa tên/xóa nhưng vẫn được chọn để gắn bbox samples.
+- Affected requirement IDs: `REQ-005`, `REQ-007`
+- Previous meaning: Công cụ nhãn đối tượng đã được mô tả ở mức import hình/video frame, khoanh bbox, đặt nhãn và đồng bộ vào zone, nhưng chưa ràng buộc file media thật được backend lưu lại, reload persisted samples từ DB, sửa bbox đã lưu, soft delete/restore nhãn custom, uniqueness tên nhãn, batch validation, hay rule mặc định `cấm` khi sync vào zone rules.
+- Source: Phỏng vấn Product Owner cho CR-004 ngày 2026-08-24, dựa trên `.delivery/changes/CR-004/CHANGE-IMPACT.md`
 - Status: active
 
 ---
@@ -93,11 +103,11 @@ Hệ thống cung cấp giải pháp giám sát an ninh camera AI tự động c
 
 ## REQ-005 Cấu hình Zone Đa giác tương tác (Interactive Polygon Zone Setup)
 
-- Behavior: Cung cấp React UI Component SVG Canvas Editor (`<PolygonZoneEditor>`) cho phép chọn camera (`GATE-01`, `BAI-KIEM`), chuyển đổi giữa công cụ Chọn và Vẽ zone. Chế độ vẽ zone hỗ trợ click từng đỉnh tạo polygon đa giác mới qua React state. Chế độ chọn zone cho phép kéo đỉnh ô vuông để chỉnh hình dạng, kéo điểm tròn giữa cạnh để thêm góc mới, kéo thân đa giác để di chuyển zone, và bấm xóa zone. Mỗi zone cho phép cấu hình bật/tắt (toggle ✓ được phép / ✕ cấm) từng loại đối tượng. Backend phải duy trì zone cache in-memory theo `camera_id`, trong đó DB là source of truth cho CRUD còn runtime cache là source trực tiếp cho luồng xử lý frame khu vực.
+- Behavior: Cung cấp React UI Component SVG Canvas Editor (`<PolygonZoneEditor>`) cho phép chọn camera (`GATE-01`, `BAI-KIEM`), chuyển đổi giữa công cụ Chọn và Vẽ zone. Chế độ vẽ zone hỗ trợ click từng đỉnh tạo polygon đa giác mới qua React state. Chế độ chọn zone cho phép kéo đỉnh ô vuông để chỉnh hình dạng, kéo điểm tròn giữa cạnh để thêm góc mới, kéo thân đa giác để di chuyển zone, và bấm xóa zone. Mỗi zone cho phép cấu hình bật/tắt (toggle ✓ được phép / ✕ cấm) từng loại đối tượng. Danh sách loại đối tượng của zone gồm 8 loại mặc định và các nhãn custom đang hoạt động được đồng bộ từ công cụ `Nhãn đối tượng`; nhãn custom mới hoặc được restore phải tự động xuất hiện trong mọi zone với trạng thái mặc định là `cấm`. Backend phải duy trì zone cache in-memory theo `camera_id`, trong đó DB là source of truth cho CRUD còn runtime cache là source trực tiếp cho luồng xử lý frame khu vực.
 - Rationale: Linh hoạt thay đổi vùng giám sát theo sơ đồ thực tế của doanh nghiệp mà không cần sửa code.
 - Priority: P0
 - Source: User RFP & UI Mockup (Prototype: Màn 2 - Cài đặt vẽ zone)
-- Acceptance criteria: 1. Cấu hình zone vẽ trên React SVG Canvas UI được cập nhật ngay lập tức xuống AI pipeline mà không cần restart server. 2. Sau mỗi thao tác CRUD zone, runtime cache theo `camera_id` được refresh/invalidate thành công để frame loop áp dụng quy tắc mới mà không cần DB read cho từng frame. 3. Hỗ trợ thao tác kéo thả đỉnh, thêm đỉnh ở cạnh, di chuyển thân zone mượt mà trên React SVG Canvas với Custom Hook `usePolygonEditor`. 4. Cập nhật bảng quy tắc cấm/cho phép theo từng loại xe/đối tượng ngay trên thẻ điều khiển zone với Lucide React icons (Check, X).
+- Acceptance criteria: 1. Cấu hình zone vẽ trên React SVG Canvas UI được cập nhật ngay lập tức xuống AI pipeline mà không cần restart server. 2. Sau mỗi thao tác CRUD zone hoặc đồng bộ nhãn custom vào zone rules, runtime cache theo `camera_id` được refresh/invalidate thành công để frame loop áp dụng quy tắc mới mà không cần DB read cho từng frame. 3. Hỗ trợ thao tác kéo thả đỉnh, thêm đỉnh ở cạnh, di chuyển thân zone mượt mà trên React SVG Canvas với Custom Hook `usePolygonEditor`. 4. Cập nhật bảng quy tắc cấm/cho phép theo từng loại xe/đối tượng ngay trên thẻ điều khiển zone với Lucide React icons (Check, X). 5. Khi nhãn custom mới được tạo hoặc restore, nhãn đó xuất hiện trong danh sách loại đối tượng của mọi zone với trạng thái mặc định là `cấm`; người dùng có thể đổi trạng thái theo từng zone sau đó.
 - Status: approved
 - Delivery classification: changed
 
@@ -113,11 +123,11 @@ Hệ thống cung cấp giải pháp giám sát an ninh camera AI tự động c
 
 ## REQ-007 Tool Gắn nhãn Mẫu Đối tượng Custom (Custom Object Labeling & Dataset Tool)
 
-- Behavior: Cho phép import hình ảnh hoặc video file vào React Component `<DatasetAnnotator>`. Với video, hỗ trợ thanh timeline scrubber (`00:00` - `02:30`) và danh sách tick chọn khung hình để gán nhãn. Người dùng kéo khoanh bbox quanh đối tượng trên canvas React, chọn phân loại (Người hoặc Hình dáng xe), đặt tên nhãn custom và bấm "Lưu mẫu đã gắn". Nhãn mới tự động xuất hiện trong danh sách cấu hình của mọi zone.
+- Behavior: Cho phép import hình ảnh hoặc video file vào React Component `<DatasetAnnotator>`; file import được backend lưu cùng metadata để có thể tải lại source/frame và bbox samples sau khi reload trang. Với video, người dùng dùng timeline scrubber để chọn frame hiện tại, vẽ nhiều bbox trên frame đó, lưu, rồi chuyển sang frame khác nếu cần. Người dùng kéo khoanh bbox quanh đối tượng trên canvas React, chọn nhãn từ 8 nhãn hệ thống hoặc nhãn custom, và lưu batch mẫu đã gắn vào DB. 8 nhãn mặc định là nhãn hệ thống: không được sửa tên hoặc xóa, nhưng vẫn được chọn để gắn bbox samples và bổ sung dữ liệu huấn luyện. Nhãn custom hỗ trợ tạo mới, sửa tên, soft delete và restore không giới hạn thời gian; tên nhãn custom phải duy nhất không phân biệt hoa/thường. Nhãn custom mới hoặc được restore tự động xuất hiện trong danh sách cấu hình của mọi zone với trạng thái mặc định là `cấm`. Nhãn custom mới chỉ cam kết quản lý dataset/rules, chưa bắt buộc AI realtime nhận diện class mới nếu chưa có model đã huấn luyện.
 - Rationale: Mở rộng khả năng phát hiện của mô hình YOLOv26 cho các loại phương tiện/trang phục đặc thù trong nhà máy/cảng biển.
 - Priority: P1
 - Source: User RFP & UI Mockup (Prototype: Màn 2 - Gắn nhãn đối tượng)
-- Acceptance criteria: 1. Hỗ trợ gắn nhiều mẫu bbox trên cùng một khung hình và lưu batch ("Lưu X mẫu đã gắn") bằng React state hook `useDatasetAnnotator`. 2. Hỗ trợ timeline scrubber mượt mà duyệt các khung hình từ video file import. 3. Nhãn mới lưu xong lập tức đồng bộ vào danh sách phân loại đối tượng cho tất cả các zone.
+- Acceptance criteria: 1. Sau khi import ảnh/video, reload trang vẫn tải lại được media source, metadata, frame đang gắn nhãn và các bbox samples đã lưu từ DB. 2. Hỗ trợ gắn nhiều mẫu bbox trên cùng một frame và lưu batch; nếu bất kỳ sample nào thiếu nhãn, bbox rỗng/quá nhỏ hoặc source/frame không hợp lệ thì toàn bộ batch không được lưu và người dùng nhận được lỗi để sửa. 3. Với video, timeline scrubber cho phép chọn frame hiện tại để vẽ bbox; không yêu cầu batch liên frame hoặc gallery trích frame tự động trong CR-004. 4. BBox sample đã lưu có thể được chọn để chỉnh lại khung bbox hoặc đổi nhãn, và thay đổi phải được lưu/tải lại từ DB. 5. 8 nhãn hệ thống không thể sửa tên hoặc xóa, nhưng có thể được chọn để gắn thêm bbox samples và tăng số lượng mẫu. 6. Nhãn custom mới phải có tên duy nhất không phân biệt hoa/thường; đổi tên nhãn custom cập nhật xuyên suốt samples và zone rules mà không tạo nhãn mới. 7. Không cho xóa nhãn custom đang được dùng trong zone rules; với nhãn không còn được dùng, hệ thống hỏi xác nhận trước khi soft delete, giữ samples để restore và không giới hạn thời gian restore trong CR-004. 8. Khi tạo hoặc restore nhãn custom, hệ thống tự động đồng bộ nhãn vào danh sách loại đối tượng của mọi zone với trạng thái mặc định là `cấm`.
 - Status: approved
 - Delivery classification: changed
 
