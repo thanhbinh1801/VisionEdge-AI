@@ -1,9 +1,9 @@
 ---
 artifact: ASSUMPTIONS.md
-version: 1.0.0
+version: 1.1.0
 owner: collect-requirements
-status: approved
-updated_at: "2026-08-24T19:08:31+07:00"
+status: in-review
+updated_at: "2026-08-24T22:06:32+07:00"
 ---
 
 # Danh sách Giả định Hệ thống SentriAI Mini

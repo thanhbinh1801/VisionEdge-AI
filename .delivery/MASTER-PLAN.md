@@ -1,38 +1,40 @@
 ---
 artifact: MASTER-PLAN.md
-version: 2.1.0
+version: 2.2.0
 owner: plan-delivery
 status: approved
-updated_at: "2026-08-24T19:14:07+07:00"
+updated_at: "2026-08-24T22:10:42+07:00"
 depends_on: REQUIREMENTS.md, ARCHITECTURE.md, TECHNICAL-RISKS.md, ADR-001-monolithic-python-fastapi.md, ADR-002-point-in-polygon-zone-evaluation.md, ADR-003-event-cooldown-deduplication.md, ADR-004-llm-text-to-sql-with-fallback.md, ADR-005-Custom-Label-Matching-Architecture.md
 ---
 
 Delivery scope: change-request
 
-# Kế hoạch Triển khai Dự án Giám sát Camera AI (SentriAI Mini) - CR-001, CR-002, CR-003 & CR-004
+# Kế hoạch Triển khai Dự án Giám sát Camera AI (SentriAI Mini) - CR-001 đến CR-005
 
 ## 1. Tổng quan Chiến lược Triển khai
 
-Phạm vi master plan hiện tại bao phủ 4 change request:
+Phạm vi master plan hiện tại bao phủ 5 change request:
 - `CR-001`: luồng giám sát cổng/khu vực, zone rules, whitelist/dataset nền tảng.
 - `CR-002`: hoàn thiện UI dùng chung, alert flows, chatbot và nghiệm thu tích hợp.
 - `CR-003`: tách `Area Zone Monitoring` thành `video stream lane`, `realtime metadata lane`, `event/alert lane`, đồng thời đưa zone rules vào cache in-memory để loại DB khỏi hot path mỗi frame.
 - `CR-004`: chuyển tab `Cài đặt > Nhãn đối tượng` từ mock/local state sang flow dữ liệu thật gồm import ảnh/video, chọn frame, bbox samples persisted, CRUD nhãn custom mềm và đồng bộ zone rules.
+- `CR-005`: gửi Telegram evidence notification cho vi phạm khu vực do đối tượng cấm đi vào zone, gồm thời gian vi phạm đúng, camera, zone, loại đối tượng, lý do vi phạm và file video clip chứng cứ 10s.
 
 Hệ thống được tổ chức theo 4 Phase chính:
 - **Phase 1: Project Initialization & Global Foundation Design**: Khởi tạo khung dự án (Backend & Frontend Scaffold), thiết kế hợp đồng toàn cục `API-FOUNDATION.md`, `DATABASE-DESIGN.md` và `UI-UX-FOUNDATION.md`.
 - **Phase 2: Core Data Layer, Engines & Shared Components**: Phát triển CSDL SQLite (Xe quen/Xe lạ, Polygon zone rules, Custom BBox dataset samples), Core AI Engine (8 nhóm phương tiện/người, Point-in-Polygon, Cooldown) và bộ Shared Components.
 - **Phase 3: Module Implementation & System Integration**: Triển khai 4 Trang/Tab chính (Gate Dashboard LPR, Area Security Dashboard, Zone & Tag Settings với SVG Canvas 4 thao tác & BBox dataset tool, AI Chatbot Assistant với clip 10s bằng chứng), sau đó bổ sung refactor realtime area metadata cho `CR-003` và verification liên quan.
 - **Phase 4: CR-004 Real Object Labeling Flow**: Thiết kế DB/storage, API và UI/UX cho object labeling thật, sau đó triển khai backend/frontend và nghiệm thu end-to-end.
+- **Phase 5: CR-005 Telegram Evidence Notification**: Thiết kế contract event/alert evidence, triển khai backend Telegram gửi file video 10s trực tiếp kèm nội dung bắt buộc, kiểm tra nhất quán AI Assistant evidence và nghiệm thu end-to-end cho thông báo Telegram.
 
 ## 2. Tổng quan Task Inventory
 
-- Tổng số task hiện có trong master plan: `24`
-- Dải task hiện dùng: `TASK-001` đến `TASK-025`, trừ `TASK-011` hiện chưa được cấp phát
+- Tổng số task hiện có trong master plan: `27`
+- Dải task hiện dùng: `TASK-001` đến `TASK-028`, trừ `TASK-011` hiện chưa được cấp phát
 - Nhóm foundation/design: `TASK-001` đến `TASK-005`, `TASK-016`
-- Nhóm feature design: `TASK-020`, `TASK-021`, `TASK-022`
-- Nhóm implementation: `TASK-006` đến `TASK-010`, `TASK-012` đến `TASK-014`, `TASK-017`, `TASK-018`, `TASK-023`, `TASK-024`
-- Nhóm verification/diagnosis: `TASK-015`, `TASK-019`, `TASK-025`
+- Nhóm feature design: `TASK-020`, `TASK-021`, `TASK-022`, `TASK-026`
+- Nhóm implementation: `TASK-006` đến `TASK-010`, `TASK-012` đến `TASK-014`, `TASK-017`, `TASK-018`, `TASK-023`, `TASK-024`, `TASK-027`
+- Nhóm verification/diagnosis: `TASK-015`, `TASK-019`, `TASK-025`, `TASK-028`
 
 ### Danh sách task hiện hữu
 
@@ -62,6 +64,9 @@ Hệ thống được tổ chức theo 4 Phase chính:
 | `TASK-023` | `backend-implementation` | Backend object labeling theo design đã duyệt |
 | `TASK-024` | `frontend-implementation` | Frontend object labeling theo design đã duyệt |
 | `TASK-025` | `verify-feature` | Verification end-to-end cho CR-004 |
+| `TASK-026` | `api-design` | Thiết kế contract event/alert evidence cho Telegram CR-005 |
+| `TASK-027` | `backend-implementation` | Backend Telegram evidence notification cho vi phạm khu vực |
+| `TASK-028` | `verify-feature` | Verification end-to-end cho CR-005 Telegram evidence |
 
 ---
 
@@ -507,6 +512,68 @@ Hệ thống được tổ chức theo 4 Phase chính:
 - Wave: 5
 - Status: planned
 
+## Phase 5 — CR-005 Telegram Evidence Notification
+
+- Gate: integration-check
+- Integration commands: python -m pytest backend/tests/test_alerts.py backend/tests/test_live_detections_event.py -q
+
+### Wave 1 (Evidence Contract)
+
+#### TASK-026 Thiết kế Contract Event/Alert Evidence cho Telegram CR-005
+- Task type: feature-design
+- Scope: feature
+- Module: api-gateway
+- Linked requirements: REQ-002, REQ-003, REQ-004, REQ-008, REQ-009, CR-005
+- Capability: api-design
+- Dependencies: TASK-016
+- Inputs: .delivery/REQUIREMENTS.md, .delivery/DOMAIN-MODEL.md, .delivery/changes/CR-005/CHANGE-IMPACT.md, .delivery/API-CONTRACT.md, docs/contracts/api/api-schema.json, docs/contracts/api/websocket-events.json
+- Outputs: .delivery/tasks/TASK-026/API-CONTRACT.md, .delivery/tasks/TASK-026/TASK-RESULT.md
+- Completion gate: Thiết kế xong contract nghiệp vụ/API cho event vi phạm khu vực dùng chung giữa Event Feed, AI Assistant và Telegram, gồm thời gian vi phạm đúng, camera, zone, loại đối tượng, lý do vi phạm, clip 10s và trạng thái lỗi gửi Telegram mà chưa sửa production code.
+- Verification method: python D:\Skill\SKILLs\design-api\scripts\validate_api_design.py D:\Hilab\Project34 TASK-026 --scope feature
+- Parallelizable: no
+- Parallel-safety notes: Chạy sau TASK-016 để kế thừa metadata/event lane semantics; không cập nhật `.delivery/API-CONTRACT.md` hoặc docs/contracts/api trong task design riêng nếu chưa được phê duyệt.
+- Write scope: .delivery/tasks/TASK-026/
+- Wave: 1
+- Status: planned
+
+### Wave 2 (Backend Evidence Notification)
+
+#### TASK-027 Backend Telegram Evidence Notification cho Vi phạm Khu vực
+- Task type: implementation
+- Scope: feature
+- Module: alert-dispatcher
+- Linked requirements: REQ-002, REQ-003, REQ-004, REQ-009, CR-005
+- Capability: backend-implementation
+- Dependencies: TASK-017, TASK-026
+- Inputs: .delivery/tasks/TASK-026/API-CONTRACT.md, backend/app/services/event_manager.py, backend/app/services/alert_dispatcher.py, backend/app/services/vision_pipeline.py, backend/app/api/v1/websocket.py
+- Outputs: backend alert/event implementation updates, backend tests, .delivery/tasks/TASK-027/TASK-RESULT.md
+- Completion gate: Khi đối tượng thuộc danh sách cấm đi vào zone khu vực, backend chỉ gửi 1 Telegram cho event đầu tiên đã qua dedup/cooldown, gửi trực tiếp file video clip chứng cứ 10s kèm thời gian vi phạm đúng, camera, zone, loại đối tượng và lý do vi phạm; nếu Telegram lỗi thì event/clip vẫn lưu, UI vẫn cảnh báo và lỗi được ghi nhận.
+- Verification method: python -m pytest backend/tests/test_alerts.py backend/tests/test_live_detections_event.py -q
+- Parallelizable: no
+- Parallel-safety notes: Không chạy song song với task khác ghi `backend/app/services/event_manager.py` hoặc `backend/app/services/alert_dispatcher.py`.
+- Write scope: backend/app/services/, backend/app/api/v1/, backend/tests/, .delivery/tasks/TASK-027/
+- Wave: 2
+- Status: planned
+
+### Wave 3 (CR-005 Verification)
+
+#### TASK-028 Verification End-to-End cho CR-005 Telegram Evidence
+- Task type: verification
+- Scope: feature
+- Module: alert-dispatcher
+- Linked requirements: REQ-002, REQ-003, REQ-004, REQ-008, REQ-009, CR-005
+- Capability: verify-feature
+- Dependencies: TASK-026, TASK-027
+- Inputs: .delivery/REQUIREMENTS.md, .delivery/DOMAIN-MODEL.md, .delivery/tasks/TASK-026/API-CONTRACT.md, .delivery/tasks/TASK-027/TASK-RESULT.md, backend implementation under backend/app/
+- Outputs: .delivery/tasks/TASK-028/TEST-REPORT.md, .delivery/tasks/TASK-028/TASK-RESULT.md, bug records if verification fails
+- Completion gate: Xác minh end-to-end một vi phạm khu vực do đối tượng cấm đi vào zone tạo đúng 1 event/clip/Telegram trong cooldown; Telegram có đủ nội dung bắt buộc và gửi trực tiếp video 10s; metadata lane không tự kích hoạt Telegram; lỗi Telegram không chặn lưu event/clip hoặc cảnh báo UI.
+- Verification method: python D:\Skill\SKILLs\verify-feature\scripts\validate_feature_verification.py D:\Hilab\Project34 TASK-028
+- Parallelizable: no
+- Parallel-safety notes: Verification chạy sau toàn bộ design và implementation CR-005; không sửa production code.
+- Write scope: .delivery/tasks/TASK-028/
+- Wave: 3
+- Status: planned
+
 
 ---
 
@@ -515,15 +582,16 @@ Hệ thống được tổ chức theo 4 Phase chính:
 ## Coverage Map
 - REQ-001 -> TASK-001, TASK-002, TASK-003, TASK-004, TASK-005, TASK-006, TASK-009, TASK-015
 - REQ-002 -> TASK-001, TASK-002, TASK-003, TASK-004, TASK-005, TASK-010, TASK-015
-- REQ-002 -> TASK-001, TASK-002, TASK-003, TASK-004, TASK-005, TASK-010, TASK-015, TASK-016, TASK-017, TASK-018, TASK-019
-- REQ-003 -> TASK-002, TASK-004, TASK-008, TASK-014, TASK-015
-- REQ-004 -> TASK-007, TASK-015, TASK-016, TASK-017, TASK-019
+- REQ-002 -> TASK-001, TASK-002, TASK-003, TASK-004, TASK-005, TASK-010, TASK-015, TASK-016, TASK-017, TASK-018, TASK-019, TASK-026, TASK-027, TASK-028
+- REQ-003 -> TASK-002, TASK-004, TASK-008, TASK-014, TASK-015, TASK-026, TASK-027, TASK-028
+- REQ-004 -> TASK-007, TASK-015, TASK-016, TASK-017, TASK-019, TASK-026, TASK-027, TASK-028
 - REQ-005 -> TASK-002, TASK-004, TASK-005, TASK-012, TASK-015, TASK-016, TASK-017, TASK-018, TASK-019, TASK-020, TASK-021, TASK-022, TASK-023, TASK-024, TASK-025
 - REQ-006 -> TASK-003, TASK-006, TASK-012, TASK-015
 - REQ-007 -> TASK-007, TASK-012, TASK-015, TASK-020, TASK-021, TASK-022, TASK-023, TASK-024, TASK-025
-- REQ-008 -> TASK-002, TASK-013, TASK-015
-- REQ-009 -> TASK-002, TASK-008, TASK-014, TASK-015, TASK-016, TASK-017, TASK-018, TASK-019
+- REQ-008 -> TASK-002, TASK-013, TASK-015, TASK-026, TASK-028
+- REQ-009 -> TASK-002, TASK-008, TASK-014, TASK-015, TASK-016, TASK-017, TASK-018, TASK-019, TASK-026, TASK-027, TASK-028
 - CR-001 -> TASK-002, TASK-005, TASK-006, TASK-007, TASK-010, TASK-012, TASK-015
 - CR-002 -> TASK-001, TASK-002, TASK-003, TASK-004, TASK-005, TASK-006, TASK-007, TASK-008, TASK-009, TASK-010, TASK-012, TASK-013, TASK-014, TASK-015
 - CR-003 -> TASK-016, TASK-017, TASK-018, TASK-019
 - CR-004 -> TASK-020, TASK-021, TASK-022, TASK-023, TASK-024, TASK-025
+- CR-005 -> TASK-026, TASK-027, TASK-028

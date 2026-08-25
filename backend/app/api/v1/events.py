@@ -1,7 +1,11 @@
+import logging
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
+
+logger = logging.getLogger(__name__)
+ICT_TZ = timezone(timedelta(hours=7))
 
 import cv2
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
@@ -11,6 +15,7 @@ from sqlalchemy.orm import Session
 
 from app.services.frame_extractor import resolve_video_path
 from backend.app.core.config import settings
+from backend.app.services.alert_dispatcher import alert_dispatcher
 from backend.app.services.area_metadata import build_area_metadata_event
 from backend.app.services.event_manager import EventManager
 from backend.app.services.video_stream import get_camera_pipeline
@@ -30,6 +35,7 @@ event_manager = EventManager(
     clips_dir=settings.CLIPS_DIR,
 )
 _FIRST_FRAME_TIMEOUT_SECONDS = 5.0
+_event_telegram_status_cache: dict[str, dict[str, Any]] = {}
 
 class EventResponse(BaseModel):
     id: str
@@ -52,9 +58,20 @@ class EventResponse(BaseModel):
 
 
 def _event_response_from_model(event: EventModel) -> dict[str, Any]:
+    ts = event.timestamp
+    if isinstance(ts, datetime):
+        if ts.tzinfo is None:
+            ts_iso = ts.replace(tzinfo=ICT_TZ).isoformat()
+        else:
+            ts_iso = ts.astimezone(ICT_TZ).isoformat()
+    elif isinstance(ts, str):
+        ts_iso = ts
+    else:
+        ts_iso = str(ts)
+
     return {
         "id": event.id,
-        "timestamp": event.timestamp,
+        "timestamp": ts_iso,
         "camera_id": event.camera_id,
         "zone_id": event.zone_id,
         "zone_name": event.zone.name if event.zone is not None else None,
@@ -106,7 +123,13 @@ def _persist_violation_event(
     if event_manager.is_duplicate(camera_id, zone_id, cls_name):
         return None
 
-    event_timestamp = timestamp or datetime.now(timezone.utc)
+    if timestamp is None:
+        event_timestamp = datetime.now(ICT_TZ)
+    else:
+        if timestamp.tzinfo is None:
+            event_timestamp = timestamp.replace(tzinfo=timezone.utc).astimezone(ICT_TZ)
+        else:
+            event_timestamp = timestamp.astimezone(ICT_TZ)
     video_clip_url = event_manager.slice_10s_ring_buffer_clip(
         camera_id,
         timestamp=event_timestamp.timestamp(),
@@ -127,7 +150,42 @@ def _persist_violation_event(
         crop_image_url="/media/crops/crop_live.jpg",
         video_clip_url=video_clip_url,
     )
-    return event_repo.create(event)
+    created_event = event_repo.create(event)
+
+    vn_name = detection.get("vietnamese_name") or OBJECT_VIETNAMESE_NAMES.get(cls_name, cls_name)
+    zone_name = detection.get("zone_name") or (created_event.zone.name if created_event.zone else "Khu vực cấm")
+
+    event_payload = {
+        "event_id": created_event.id,
+        "event_type": "ZONE_VIOLATION_EVENT",
+        "severity_level": 3,
+        "captured_at": event_timestamp.isoformat(),
+        "camera_id": camera_id,
+        "camera_name": created_event.camera.name if created_event.camera else f"Camera {camera_id}",
+        "zone_id": zone_id or "zK1",
+        "zone_name": zone_name,
+        "object_id": detection.get("id") or f"obj-{created_event.id}",
+        "object_type": cls_name,
+        "object_type_name": vn_name,
+        "violation_reason_code": "FORBIDDEN_OBJECT_IN_ZONE",
+        "violation_reason": f"{vn_name} đi vào {zone_name}",
+        "video_clip_url": video_clip_url,
+        "video_clip_duration_seconds": 10.0,
+        "snapshot_url": created_event.crop_image_url or "/media/crops/crop_live.jpg",
+    }
+
+    try:
+        dispatch_res = alert_dispatcher.send_telegram_notification_sync(event_payload)
+        _event_telegram_status_cache[created_event.id] = dispatch_res
+    except Exception as exc:
+        logger.error(f"Telegram notification dispatch exception for event {created_event.id}: {exc}")
+        _event_telegram_status_cache[created_event.id] = {
+            "status": "failed",
+            "error": "NETWORK_ERROR",
+            "dispatched_at": None,
+        }
+
+    return created_event
 
 
 def persist_area_metadata_violations(
@@ -166,6 +224,64 @@ def get_events(
     repo = EventRepository(db)
     events = repo.get_recent_events(camera_id=camera_id, severity_level=severity_level, limit=limit)
     return [_event_response_from_model(event) for event in events]
+
+
+@router.get("/{event_id}/evidence")
+def get_event_evidence(
+    event_id: str,
+    db: Session = Depends(get_db),  # noqa: B008
+):
+    """
+    Returns detailed evidence payload for a specific area violation event.
+    """
+    event = db.query(EventModel).filter(EventModel.id == event_id).first()
+    if not event:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Không tìm thấy bằng chứng cho sự kiện ID: {event_id}",
+        )
+
+    dispatch_info = _event_telegram_status_cache.get(event_id, {})
+    tele_status = dispatch_info.get("status")
+    if not tele_status:
+        tele_status = "skipped" if not settings.TELEGRAM_BOT_TOKEN else "sent"
+    tele_err = dispatch_info.get("error")
+    tele_dispatched = dispatch_info.get("dispatched_at")
+
+    vn_name = OBJECT_VIETNAMESE_NAMES.get(event.object_class, event.object_class)
+    zone_name = event.zone.name if event.zone is not None else "Khu vực cấm"
+
+    evidence_payload = {
+        "event_id": event.id,
+        "event_type": "ZONE_VIOLATION_EVENT",
+        "severity_level": event.severity_level,
+        "captured_at": event.timestamp.isoformat(),
+        "camera_id": event.camera_id,
+        "camera_name": event.camera.name if event.camera is not None else f"Camera {event.camera_id}",
+        "zone_id": event.zone_id or "zK1",
+        "zone_name": zone_name,
+        "object_id": f"obj-{event.id}",
+        "object_type": event.object_class,
+        "object_type_name": vn_name,
+        "violation_reason_code": "FORBIDDEN_OBJECT_IN_ZONE",
+        "violation_reason": f"{vn_name} đi vào {zone_name}",
+        "video_clip_url": event.video_clip_url or f"/media/clips/clip_{event.camera_id}.mp4",
+        "video_clip_duration_seconds": 10.0,
+        "snapshot_url": event.crop_image_url or "/media/crops/crop_live.jpg",
+        "telegram_status": tele_status,
+        "telegram_error": tele_err,
+        "telegram_dispatched_at": tele_dispatched,
+    }
+
+    return {
+        "success": True,
+        "data": {"evidence": evidence_payload},
+        "error": None,
+        "meta": {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "request_id": f"req_ev_{uuid.uuid4().hex[:8]}",
+        },
+    }
 
 @router.get("/video-feed")
 def video_feed(

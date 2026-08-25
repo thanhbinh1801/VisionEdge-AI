@@ -1,9 +1,9 @@
 ---
 artifact: API-CONTRACT.md
-version: 1.3.0
+version: 1.4.0
 owner: design-api
 status: approved
-updated_at: "2026-08-24T19:54:12+07:00"
+updated_at: "2026-08-24T22:43:00+07:00"
 linked_requirements:
   - REQ-001
   - REQ-002
@@ -18,11 +18,12 @@ linked_requirements:
   - CR-002
   - CR-003
   - CR-004
+  - CR-005
 ---
 
-# Hợp Đồng REST API & WebSocket Event Payload (SentriAI Mini — CR-001, CR-002, CR-003 & CR-004)
+# Hợp Đồng REST API & WebSocket Event Payload (SentriAI Mini — CR-001, CR-002, CR-003, CR-004 & CR-005)
 
-Tài liệu quy định chuẩn hợp đồng REST API Foundation toàn cục và giao thức WebSocket real-time cho hệ thống Giám sát Camera AI (SentriAI Mini), hỗ trợ đầy đủ quy tắc nghiệp vụ CR-001 (Phân loại 8 nhóm đối tượng, Xe quen/Xe lạ, SVG Canvas 4 thao tác, BBox Dataset Collector), CR-002 (React Framework & YOLOv26), CR-003 (Area realtime metadata lane + in-memory zone cache), và CR-004 (real object labeling flow với media import, persisted bbox samples, label CRUD/soft delete/restore, và sync zone rules).
+Tài liệu quy định chuẩn hợp đồng REST API Foundation toàn cục và giao thức WebSocket real-time cho hệ thống Giám sát Camera AI (SentriAI Mini), hỗ trợ đầy đủ quy tắc nghiệp vụ CR-001 (Phân loại 8 nhóm đối tượng, Xe quen/Xe lạ, SVG Canvas 4 thao tác, BBox Dataset Collector), CR-002 (React Framework & YOLOv26), CR-003 (Area realtime metadata lane + in-memory zone cache), CR-004 (real object labeling flow với media import, persisted bbox samples, label CRUD/soft delete/restore, và sync zone rules), và CR-005 (Telegram evidence notification vi phạm khu vực với thời gian vi phạm đúng, camera, zone, loại đối tượng, lý do vi phạm, video clip chứng cứ 10s MP4, và trạng thái gửi Telegram).
 
 ---
 
@@ -49,7 +50,9 @@ Tài liệu quy định chuẩn hợp đồng REST API Foundation toàn cục v�
 | **Dataset Samples** | `PUT` | `/api/v1/dataset/samples/{sample_id}` | Sửa bbox geometry, frame hoặc label của sample đã lưu. | Admin |
 | **Dataset Samples** | `DELETE` | `/api/v1/dataset/samples/{sample_id}` | Xóa sample và recompute `sample_count` của label liên quan. | Admin |
 | **Dataset Sync** | `POST` | `/api/v1/dataset/sync-zones` | Đồng bộ active custom labels vào zone rules và refresh zone cache. | Admin |
-| **Events** | `GET` | `/api/v1/events?severity_level={level}` | Lấy nhật ký sự kiện LPR và sự kiện khu vực bãi kiểm. | Viewer / Admin |
+| **Events** | `GET` | `/api/v1/events?severity_level={level}` | Lấy nhật ký sự kiện LPR và vi phạm khu vực có kèm evidence fields & telegram_status. | Viewer / Admin |
+| **Events Evidence** | `GET` | `/api/v1/events/{event_id}/evidence` | Lấy chi tiết bằng chứng vi phạm của sự kiện gồm 10s video clip URL và nhật ký Telegram. | Viewer / Admin |
+| **Alerts Test** | `POST` | `/api/v1/alerts/telegram/test` | Kiểm tra kết nối Telegram Bot API và gửi tin nhắn thử nghiệm từ Admin. | Admin |
 | **Chatbot** | `POST` | `/api/v1/chatbot/query` | Truy vấn trợ lý AI tiếng Việt, trả về kết quả số liệu kèm đính kèm video clip 10s. | Viewer / Admin |
 
 ---
@@ -271,3 +274,39 @@ Các error code bổ sung cho dataset/object-labeling:
 - `UPLOAD_TOO_LARGE`: file vượt 250 MB.
 - `FRAME_NOT_AVAILABLE`: frame index/timestamp nằm ngoài media source.
 - `ZONE_CACHE_REFRESH_FAILED`: DB đã commit sync nhưng refresh runtime cache fail; client có thể retry sync.
+
+### 3.8 CR-005 Telegram Evidence Notification Schemas & Error Codes
+
+#### AreaViolationEvidence Payload Schema
+
+```json
+{
+  "event_id": "evt_area_20260824_00192",
+  "event_type": "ZONE_VIOLATION_EVENT",
+  "severity_level": 3,
+  "captured_at": "2026-08-24T22:30:15+07:00",
+  "camera_id": "BAI-KIEM",
+  "camera_name": "Camera Bãi kiểm",
+  "zone_id": "zK1",
+  "zone_name": "Khu vực cấm xe máy",
+  "object_id": "trk_8821",
+  "object_type": "motorbike",
+  "object_type_name": "Xe máy",
+  "violation_reason_code": "FORBIDDEN_OBJECT_IN_ZONE",
+  "violation_reason": "Xe máy đi vào Khu vực cấm xe máy",
+  "video_clip_url": "/media/clips/evt_area_20260824_00192.mp4",
+  "video_clip_duration_seconds": 10.0,
+  "snapshot_url": "/media/snapshots/evt_area_20260824_00192.jpg",
+  "telegram_status": "sent",
+  "telegram_error": null,
+  "telegram_dispatched_at": "2026-08-24T22:30:17+07:00"
+}
+```
+
+Rules:
+- `captured_at`: mốc thời gian vi phạm thực tế từ frame/detector, không lấy thời điểm gửi Telegram HTTP request.
+- `telegram_status`: `"pending" | "sent" | "failed" | "skipped"`.
+- `telegram_error`: `null` khi gửi thành công; chuỗi mã lỗi (`BOT_TOKEN_INVALID`, `CHAT_ID_NOT_FOUND`, `TELEGRAM_API_TIMEOUT`, `RATE_LIMITED`, `VIDEO_CLIP_UNAVAILABLE`, `PAYLOAD_TOO_LARGE`, `NETWORK_ERROR`) khi thất bại.
+- Telegram Bot gửi trực tiếp tin nhắn HTML kèm file đính kèm `video_clip_url` (10s MP4 file).
+- Lỗi gửi Telegram không được hủy giao dịch lưu sự kiện hoặc chặn tín hiệu WebSocket đẩy về UI Web.
+

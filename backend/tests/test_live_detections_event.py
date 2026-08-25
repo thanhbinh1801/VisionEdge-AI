@@ -21,6 +21,15 @@ from backend.database.models import Camera, Zone
 from backend.database.models import Event as EventModel
 
 
+@pytest.fixture(autouse=True)
+def mock_telegram_dispatcher_for_live_tests(monkeypatch):
+    monkeypatch.setattr(
+        events.alert_dispatcher,
+        "send_telegram_notification_sync",
+        lambda event_data: {"status": "sent", "dispatched_at": "2026-08-24T23:36:00+07:00"},
+    )
+
+
 def _write_fixture_video(path: Path, *, fps: int = 10, seconds: int = 12) -> None:
     writer = cv2.VideoWriter(
         str(path),

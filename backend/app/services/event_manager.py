@@ -126,3 +126,27 @@ class EventManager:
             cap.release()
             if writer is not None:
                 writer.release()
+
+        # Post-process clip with FFmpeg to H.264 (yuv420p + faststart) for Telegram & Browser player compatibility
+        if os.path.exists(destination_path):
+            try:
+                import subprocess
+                import imageio_ffmpeg
+                ffmpeg_bin = imageio_ffmpeg.get_ffmpeg_exe()
+                h264_tmp_path = destination_path + ".h264.mp4"
+                cmd = [
+                    ffmpeg_bin,
+                    "-y",
+                    "-i", destination_path,
+                    "-c:v", "libx264",
+                    "-pix_fmt", "yuv420p",
+                    "-movflags", "+faststart",
+                    h264_tmp_path,
+                ]
+                res = subprocess.run(cmd, capture_output=True, timeout=15)
+                if res.returncode == 0 and os.path.exists(h264_tmp_path) and os.path.getsize(h264_tmp_path) > 0:
+                    os.replace(h264_tmp_path, destination_path)
+                elif os.path.exists(h264_tmp_path):
+                    os.remove(h264_tmp_path)
+            except Exception as exc:
+                logger.warning(f"FFmpeg H.264 transcoding skipped for {destination_path}: {exc}")
