@@ -199,8 +199,9 @@ VALUES ('1.2.0-cr004-object-labeling', 'CR-004 real object labeling storage cont
 
 INSERT OR IGNORE INTO cameras (id, name, location, stream_url, fps)
 VALUES 
-    ('GATE-01', 'Camera Cổng Ván LPR', 'Cổng Chính IN', '/videos/GATE-01.mp4', 15.0),
-    ('BAI-KIEM', 'Camera Bãi Kiểm An Ninh', 'Khu Vực Bãi Kiểm', '/videos/BAI_KIEM.mp4', 10.0);
+    ('GATE-01', 'Camera Cổng Ván LPR', 'Cổng Chính IN', '/videos/GATE-01.mp4', 25.0),
+    ('BAI-KIEM', 'Camera Bãi Kiểm An Ninh', 'Khu Vực Bãi Kiểm', '/videos/BAI-KIEM.mp4', 25.0),
+    ('XUONG-AN-NINH', 'Camera Xưởng An Ninh', 'Xưởng An Ninh Nội Bộ', '/videos/XUONG-AN-NINH.mp4', 16.0);
 
 INSERT OR IGNORE INTO kpi_realtime_cache (id, gate_vehicles_total, gate_lpr_success, gate_lpr_failed, gate_avg_confidence, area_active_objects, area_zone_violations, area_active_machinery, area_total_zones)
 VALUES ('GLOBAL_KPI', 128, 120, 8, 94.5, 14, 3, 5, 2);
@@ -216,10 +217,23 @@ VALUES
     ('lbl_system_bicycle', 'bicycle', 'Xe đạp', 'system', 'vehicle_shape', 0, 1),
     ('lbl_system_person', 'person', 'Người', 'system', 'person', 0, 1);
 
+-- Toạ độ polygon là phần trăm 0-100 của khung hình, vẽ cho bộ clip CCTV cảng
+-- HATECO Hải Phòng hiện hành. Nguồn chính tắc của bộ toạ độ này là
+-- backend/scripts/seed_area_demo.py (có ghi chú cách vẽ và số đo quỹ đạo);
+-- sửa ở đây thì phải sửa cả bên đó, và ngược lại.
+--
+-- Luật: vùng lối đi bộ cấm máy móc nặng, vùng bãi/thao tác cấm phương tiện cá
+-- nhân. Cố tình không cấm 'person' ở zone bãi — cảnh cảng lúc nào cũng có công
+-- nhân nên cấm person sẽ biến sổ cảnh báo thành danh sách toàn 'Người'.
+--
+-- Xác minh bằng hình sau mỗi lần sửa:
+--     .venv/Scripts/python.exe backend/scripts/render_zone_overlay.py
 INSERT OR IGNORE INTO zones (id, camera_id, name, vertices, allowed_classes, forbidden_classes, color)
 VALUES
-    ('zA', 'GATE-01', 'Làn IN 1', '[{"x":36,"y":54},{"x":50,"y":54},{"x":42,"y":95},{"x":10,"y":95}]', '["container","truck"]', '["car","motorbike","bicycle","person"]', '#30d158'),
-    ('zB', 'GATE-01', 'Làn IN 2', '[{"x":52,"y":54},{"x":66,"y":54},{"x":95,"y":95},{"x":47,"y":95}]', '["container","truck"]', '["car","motorbike","bicycle","person"]', '#2f9bff'),
-    ('zK1', 'BAI-KIEM', 'Zone bãi kiểm', '[{"x":54,"y":52},{"x":88,"y":58},{"x":92,"y":90},{"x":48,"y":92}]', '["container","forklift","truck","crane"]', '["car","motorbike","bicycle","person"]', '#30d158'),
-    ('zK2', 'BAI-KIEM', 'Zone làn di chuyển', '[{"x":38,"y":42},{"x":52,"y":42},{"x":46,"y":94},{"x":8,"y":94}]', '["container","forklift","truck"]', '["car","motorbike","bicycle","person"]', '#ff9f0a'),
-    ('zK3', 'BAI-KIEM', 'Zone cấm PT cá nhân', '[{"x":6,"y":30},{"x":34,"y":28},{"x":36,"y":60},{"x":4,"y":66}]', '["container"]', '["car","motorbike","bicycle","person"]', '#ff453a');
+    ('zA', 'GATE-01', 'Làn IN 1', '[{"x":30,"y":40},{"x":47,"y":40},{"x":38,"y":100},{"x":2,"y":100}]', '["container","truck"]', '["car","motorbike","bicycle"]', '#30d158'),
+    ('zB', 'GATE-01', 'Làn IN 2', '[{"x":52,"y":38},{"x":80,"y":34},{"x":99,"y":98},{"x":58,"y":100}]', '["container","truck"]', '["car","motorbike","bicycle"]', '#2f9bff'),
+    ('zK1', 'BAI-KIEM', 'Zone bãi kiểm hoá', '[{"x":54,"y":42},{"x":89,"y":44},{"x":93,"y":78},{"x":55,"y":80}]', '["container","forklift","truck","crane","person"]', '["car","motorbike","bicycle"]', '#30D158'),
+    ('zK2', 'BAI-KIEM', 'Zone làn di chuyển', '[{"x":38,"y":42},{"x":52,"y":42},{"x":40,"y":100},{"x":10,"y":100}]', '["container","forklift","truck","crane","person"]', '["car","motorbike","bicycle"]', '#FF9F0A'),
+    ('zK3', 'BAI-KIEM', 'Zone bãi container', '[{"x":0,"y":40},{"x":26,"y":38},{"x":30,"y":66},{"x":0,"y":72}]', '["container","forklift","truck","crane","person"]', '["car","motorbike","bicycle"]', '#EF4444'),
+    ('zX1', 'XUONG-AN-NINH', 'Zone máy móc xưởng', '[{"x":50,"y":40},{"x":99,"y":44},{"x":99,"y":92},{"x":54,"y":96}]', '["container","forklift","truck","crane","person"]', '["car","motorbike","bicycle"]', '#EF4444'),
+    ('zX2', 'XUONG-AN-NINH', 'Zone lối đi bộ', '[{"x":22,"y":48},{"x":50,"y":44},{"x":54,"y":96},{"x":24,"y":100}]', '["person"]', '["forklift","crane","truck","container"]', '#30D158');

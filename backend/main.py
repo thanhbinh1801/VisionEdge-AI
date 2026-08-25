@@ -8,6 +8,10 @@ if backend_dir not in sys.path:
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
+# .env của gốc dự án được nạp trong app.core.config qua model_config.env_file.
+# Không gọi load_dotenv() ở đây: nó ghi vào os.environ toàn cục nên các test dựng
+# Settings(_env_file=None) sẽ đọc phải .env của máy đang chạy.
+
 from app.api.router import api_router, websocket_router
 from app.core.config import settings
 from app.core.logger import logger
@@ -31,7 +35,9 @@ app.add_middleware(
 )
 
 # Mount Static Files for videos and prototype image assets
-videos_dir = os.path.join(backend_dir, "data", "videos")
+videos_dir = os.path.join(project_root, "data", "video")
+if not os.path.exists(videos_dir):
+    videos_dir = os.path.join(backend_dir, "data", "videos")
 if os.path.exists(videos_dir):
     app.mount("/videos", StaticFiles(directory=videos_dir), name="videos")
 

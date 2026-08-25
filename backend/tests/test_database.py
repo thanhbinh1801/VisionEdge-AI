@@ -2,7 +2,7 @@ import os
 import pytest
 from datetime import datetime
 from backend.database.engine import get_sqlite_engine, init_db, SessionLocal
-from backend.database.models import Base, Camera, Zone, Vehicle, Event, CustomLabel, DatasetSource, BBoxSample, KpiRealtimeCache
+from backend.database.models import Camera, Zone, Vehicle, Event, DatasetSource
 from backend.database.repository import (
     CameraRepository,
     ZoneRepository,

@@ -21,22 +21,38 @@ htmlcov/
 # Databases & Media storage
 *.db
 *.sqlite3
+# SQLite WAL sidecars: nội dung thay đổi liên tục khi có tiến trình đang giữ DB,
+# commit chúng chỉ tạo xung đột nhị phân ở mỗi lần pull.
+*.db-shm
+*.db-wal
 data/clips/*
 !data/clips/.gitkeep
 data/crops/*
 !data/crops/.gitkeep
 data/test_clips/
 
+# Bộ dữ liệu ảnh/video demo: nặng và không thuộc lịch sử mã nguồn.
+# Giữ lại cây thư mục để các đường dẫn cấu hình vẫn tồn tại.
+data/**
+!data/
+!data/*/
+
 # Node / Frontend (if applicable)
 node_modules/
 dist/
 build/
+# Log build dán tay, không phải sản phẩm của quy trình build.
+build-output.log
 
 # IDE & OS
 .vscode/
 .idea/
 .DS_Store
 Thumbs.db
+# Resource fork của macOS, sinh ra khi giải nén zip trên máy Mac.
+__MACOSX/
+._*
+.claude/skills/
 
 # AI Model Weights & Video files
 *.pt
@@ -44,3 +60,8 @@ weights/
 *.mp4
 
 .delivery/TEAM-PLAN-2PEOPLE-REMAINING-4-DAYS.md
+HANDOFF.md
+
+# Ảnh xác minh zone: sinh lại được bằng backend/scripts/render_zone_overlay.py,
+# mỗi lần chạy ra vài MB PNG nên không đưa vào lịch sử git.
+docs/verification/
