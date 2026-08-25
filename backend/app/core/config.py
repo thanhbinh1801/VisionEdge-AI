@@ -61,13 +61,30 @@ class Settings(BaseSettings):
     EVENT_COOLDOWN_SECONDS: int = 15
     VIDEO_PATH: str = ""
     DEMO_MODE: bool = False
+    TELEGRAM_BOT_TOKEN: str | None = None
+    TELEGRAM_CHAT_ID: str | None = None
 
     @model_validator(mode="after")
-    def normalize_database_url(self) -> "Settings":
+    def normalize_paths(self) -> "Settings":
         if self.SENTRIAI_DB_PATH and self.DATABASE_URL == DEFAULT_DATABASE_URL:
             self.DATABASE_URL = _sqlite_url_from_path(self.SENTRIAI_DB_PATH)
         else:
             self.DATABASE_URL = _canonicalize_sqlite_url(self.DATABASE_URL)
+
+        clips_path = Path(self.CLIPS_DIR)
+        if not clips_path.is_absolute():
+            resolved_clips = (PROJECT_ROOT / clips_path).resolve()
+            if not resolved_clips.exists() and (PROJECT_ROOT / "backend" / clips_path).exists():
+                resolved_clips = (PROJECT_ROOT / "backend" / clips_path).resolve()
+            self.CLIPS_DIR = str(resolved_clips)
+
+        crops_path = Path(self.CROPS_DIR)
+        if not crops_path.is_absolute():
+            resolved_crops = (PROJECT_ROOT / crops_path).resolve()
+            if not resolved_crops.exists() and (PROJECT_ROOT / "backend" / crops_path).exists():
+                resolved_crops = (PROJECT_ROOT / "backend" / crops_path).resolve()
+            self.CROPS_DIR = str(resolved_crops)
+
         return self
 
 settings = Settings()
