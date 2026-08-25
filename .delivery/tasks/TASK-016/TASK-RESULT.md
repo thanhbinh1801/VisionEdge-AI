@@ -12,8 +12,8 @@ updated_at: "2026-08-20T18:50:16+07:00"
 - Mã task: TASK-016
 - Kết quả: completed
 - Đầu vào đã dùng: `.delivery/tasks/TASK-016/TASK-PACKET.md`, `.delivery/REQUIREMENTS.md`, `.delivery/ARCHITECTURE.md`, `.delivery/API-CONTRACT.md`, `.delivery/changes/CR-003/CHANGE-IMPACT.md`, `docs/contracts/api/api-schema.json`, `docs/contracts/api/websocket-events.json`, `backend/app/api/v1/websocket.py`, `backend/app/api/v1/zones.py`, `frontend/src/services/websocket.ts`, `frontend/src/services/api.ts`, `frontend/src/pages/AreaSecurityDashboard.tsx`.
-- Đầu ra đã tạo: `.delivery/tasks/TASK-016/API-CONTRACT.md` (feature contract cho `AREA_FRAME_METADATA`, zone cache semantics, response envelopes, error model, compatibility notes), `.delivery/tasks/TASK-016/api-schema.draft.json`, `.delivery/tasks/TASK-016/websocket-events.draft.json`.
-- Bằng chứng xác minh: So khớp contract với `REQ-002`, `REQ-004`, `REQ-005`, `REQ-009` và `CR-003`; đối chiếu consumer hiện tại backend/frontend để xác định migration constraints; packet được chuẩn hóa theo task-packet contract; validator chuyên biệt cho `TASK-016` pass; draft JSON được giữ trong task scope để downstream implementation copy/promote có kiểm soát.
+- Đầu ra đã tạo: `.delivery/tasks/TASK-016/API-CONTRACT.md` (feature contract cho `AREA_FRAME_METADATA`, zone cache semantics, response envelopes, error model, compatibility notes). Các bản draft JSON ban đầu đã được thay thế bởi `docs/contracts/api/api-schema.json` và `docs/contracts/api/websocket-events.json`.
+- Bằng chứng xác minh: So khớp contract với `REQ-002`, `REQ-004`, `REQ-005`, `REQ-009` và `CR-003`; đối chiếu consumer hiện tại backend/frontend để xác định migration constraints; packet được chuẩn hóa theo task-packet contract; validator chuyên biệt cho `TASK-016` pass; contract JSON chính thức trong `docs/contracts/api/` parse hợp lệ và đã chứa phần CR-003.
 - Sai lệch: Không sửa `.delivery/REQUIREMENTS.md`, `.delivery/ARCHITECTURE.md`, `.delivery/API-CONTRACT.md`, `docs/contracts/api/*`, hoặc source ứng dụng; chỉ ghi artifact trong `.delivery/tasks/TASK-016/`.
 - Điểm chặn: none
 - Yêu cầu đổi phạm vi: none

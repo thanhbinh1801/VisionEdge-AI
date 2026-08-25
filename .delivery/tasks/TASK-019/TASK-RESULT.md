@@ -3,7 +3,7 @@ artifact: TASK-RESULT.md
 version: "1.0"
 task_id: TASK-019
 owner: verify-feature
-status: in-review
+status: approved
 updated_at: "2026-08-21T11:17:39+07:00"
 ---
 
@@ -11,6 +11,7 @@ updated_at: "2026-08-21T11:17:39+07:00"
 
 - Mã task: TASK-019
 - Kết quả: completed
+- Outcome: completed
 - Đầu vào đã dùng: `.delivery/tasks/TASK-019/TASK-PACKET.md`, `.delivery/tasks/TASK-016/API-CONTRACT.md`, `.delivery/tasks/TASK-016/TASK-RESULT.md`, `.delivery/tasks/TASK-017/TASK-RESULT.md`, `.delivery/tasks/TASK-018/TASK-RESULT.md`, backend/frontend implementation files under `backend/app/` and `frontend/src/`.
 - Đầu ra đã tạo: `.delivery/tasks/TASK-019/TEST-REPORT.md`, `.delivery/tasks/TASK-019/TASK-RESULT.md`, `.delivery/tasks/TASK-019/BUG-001.md`.
 - Bằng chứng xác minh: reran backend scoped pytest (`14 passed in 0.43s`), frontend lint/typecheck (both exit 0), frontend production build outside sandbox (success), schema trace review between backend `/events` response model and frontend event feed consumer, DB inspection for existing `ZONE_VIOLATION` rows, static trace for violation persistence from live-detections/WebSocket metadata lanes, and scoped event persistence regressions (`11 passed, 10 warnings in 25.61s`).

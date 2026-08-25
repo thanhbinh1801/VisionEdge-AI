@@ -1,35 +1,38 @@
 ---
 artifact: MASTER-PLAN.md
-version: 2.0.1
+version: 2.1.0
 owner: plan-delivery
 status: approved
-updated_at: "2026-08-20T20:35:00+07:00"
+updated_at: "2026-08-24T19:14:07+07:00"
 depends_on: REQUIREMENTS.md, ARCHITECTURE.md, TECHNICAL-RISKS.md, ADR-001-monolithic-python-fastapi.md, ADR-002-point-in-polygon-zone-evaluation.md, ADR-003-event-cooldown-deduplication.md, ADR-004-llm-text-to-sql-with-fallback.md, ADR-005-Custom-Label-Matching-Architecture.md
 ---
 
 Delivery scope: change-request
 
-# Kế hoạch Triển khai Dự án Giám sát Camera AI (SentriAI Mini) - CR-001, CR-002 & CR-003
+# Kế hoạch Triển khai Dự án Giám sát Camera AI (SentriAI Mini) - CR-001, CR-002, CR-003 & CR-004
 
 ## 1. Tổng quan Chiến lược Triển khai
 
-Phạm vi master plan hiện tại bao phủ 3 change request:
+Phạm vi master plan hiện tại bao phủ 4 change request:
 - `CR-001`: luồng giám sát cổng/khu vực, zone rules, whitelist/dataset nền tảng.
 - `CR-002`: hoàn thiện UI dùng chung, alert flows, chatbot và nghiệm thu tích hợp.
 - `CR-003`: tách `Area Zone Monitoring` thành `video stream lane`, `realtime metadata lane`, `event/alert lane`, đồng thời đưa zone rules vào cache in-memory để loại DB khỏi hot path mỗi frame.
+- `CR-004`: chuyển tab `Cài đặt > Nhãn đối tượng` từ mock/local state sang flow dữ liệu thật gồm import ảnh/video, chọn frame, bbox samples persisted, CRUD nhãn custom mềm và đồng bộ zone rules.
 
-Hệ thống được tổ chức theo 3 Phase chính:
+Hệ thống được tổ chức theo 4 Phase chính:
 - **Phase 1: Project Initialization & Global Foundation Design**: Khởi tạo khung dự án (Backend & Frontend Scaffold), thiết kế hợp đồng toàn cục `API-FOUNDATION.md`, `DATABASE-DESIGN.md` và `UI-UX-FOUNDATION.md`.
 - **Phase 2: Core Data Layer, Engines & Shared Components**: Phát triển CSDL SQLite (Xe quen/Xe lạ, Polygon zone rules, Custom BBox dataset samples), Core AI Engine (8 nhóm phương tiện/người, Point-in-Polygon, Cooldown) và bộ Shared Components.
 - **Phase 3: Module Implementation & System Integration**: Triển khai 4 Trang/Tab chính (Gate Dashboard LPR, Area Security Dashboard, Zone & Tag Settings với SVG Canvas 4 thao tác & BBox dataset tool, AI Chatbot Assistant với clip 10s bằng chứng), sau đó bổ sung refactor realtime area metadata cho `CR-003` và verification liên quan.
+- **Phase 4: CR-004 Real Object Labeling Flow**: Thiết kế DB/storage, API và UI/UX cho object labeling thật, sau đó triển khai backend/frontend và nghiệm thu end-to-end.
 
 ## 2. Tổng quan Task Inventory
 
-- Tổng số task hiện có trong master plan: `18`
-- Dải task hiện dùng: `TASK-001` đến `TASK-019`, trừ `TASK-011` hiện chưa được cấp phát
+- Tổng số task hiện có trong master plan: `24`
+- Dải task hiện dùng: `TASK-001` đến `TASK-025`, trừ `TASK-011` hiện chưa được cấp phát
 - Nhóm foundation/design: `TASK-001` đến `TASK-005`, `TASK-016`
-- Nhóm implementation: `TASK-006` đến `TASK-010`, `TASK-012` đến `TASK-014`, `TASK-017`, `TASK-018`
-- Nhóm verification/diagnosis: `TASK-015`, `TASK-019`
+- Nhóm feature design: `TASK-020`, `TASK-021`, `TASK-022`
+- Nhóm implementation: `TASK-006` đến `TASK-010`, `TASK-012` đến `TASK-014`, `TASK-017`, `TASK-018`, `TASK-023`, `TASK-024`
+- Nhóm verification/diagnosis: `TASK-015`, `TASK-019`, `TASK-025`
 
 ### Danh sách task hiện hữu
 
@@ -53,6 +56,12 @@ Hệ thống được tổ chức theo 3 Phase chính:
 | `TASK-017` | `backend-implementation` | Backend area metadata lane và zone cache |
 | `TASK-018` | `frontend-implementation` | Frontend area dashboard consume metadata lane riêng |
 | `TASK-019` | `verify-feature` | Verification cho CR-003 realtime area metadata |
+| `TASK-020` | `database-design` | Thiết kế DB/storage cho object labeling thật |
+| `TASK-021` | `api-design` | Thiết kế API upload/source/label/sample/frame/sync |
+| `TASK-022` | `ui-ux-design` | Thiết kế UI/UX cho Cài đặt > Nhãn đối tượng |
+| `TASK-023` | `backend-implementation` | Backend object labeling theo design đã duyệt |
+| `TASK-024` | `frontend-implementation` | Frontend object labeling theo design đã duyệt |
+| `TASK-025` | `verify-feature` | Verification end-to-end cho CR-004 |
 
 ---
 
@@ -316,7 +325,7 @@ Hệ thống được tổ chức theo 3 Phase chính:
 ### Wave 4 (CR-003 Area Metadata Refactor)
 
 #### TASK-016 Thiết kế Contract Realtime Metadata cho Area Monitoring
-- Task type: design
+- Task type: feature-design
 - Scope: feature
 - Module: api-gateway
 - Linked requirements: REQ-002, REQ-004, REQ-005, REQ-009, CR-003
@@ -329,7 +338,7 @@ Hệ thống được tổ chức theo 3 Phase chính:
 - Parallelizable: yes
 - Write scope: .delivery/tasks/TASK-016/
 - Wave: 4
-- Status: completed
+- Status: complete
 
 #### TASK-017 Backend Area Metadata Lane và Zone Cache
 - Task type: implementation
@@ -345,7 +354,7 @@ Hệ thống được tổ chức theo 3 Phase chính:
 - Parallelizable: yes
 - Write scope: backend/app/, backend/tests/, .delivery/tasks/TASK-017/
 - Wave: 4
-- Status: completed with follow-up bug
+- Status: needs-revision
 
 #### TASK-018 Frontend Area Dashboard consume Realtime Metadata Riêng
 - Task type: implementation
@@ -361,13 +370,13 @@ Hệ thống được tổ chức theo 3 Phase chính:
 - Parallelizable: yes
 - Write scope: frontend/src/, .delivery/tasks/TASK-018/
 - Wave: 4
-- Status: completed
+- Status: complete
 
 ### Wave 5 (CR-003 Verification & Bug Follow-up)
 
 #### TASK-019 Verification cho CR-003 Realtime Area Metadata
 - Task type: verification
-- Scope: feature
+- Scope: global
 - Module: none
 - Linked requirements: REQ-002, REQ-004, REQ-005, REQ-009, CR-003
 - Capability: verify-feature
@@ -379,7 +388,124 @@ Hệ thống được tổ chức theo 3 Phase chính:
 - Parallelizable: no
 - Write scope: .delivery/tasks/TASK-019/
 - Wave: 5
-- Status: failed with bug records
+- Status: needs-revision
+
+## Phase 4 — CR-004 Real Object Labeling Flow
+
+- Gate: integration-check
+- Integration commands: python -m pytest backend/tests/test_dataset_object_labeling.py backend/tests/test_dataset_zone_sync.py -q && npm --prefix frontend run build
+
+### Wave 1 (Database & Storage Design)
+
+#### TASK-020 Thiết kế DB/Storage cho Object Labeling Thật
+- Task type: feature-design
+- Scope: feature
+- Module: database-storage
+- Linked requirements: REQ-005, REQ-007, CR-004
+- Capability: database-design
+- Dependencies: TASK-019
+- Inputs: .delivery/REQUIREMENTS.md, .delivery/DOMAIN-MODEL.md, .delivery/changes/CR-004/CHANGE-IMPACT.md, docs/contracts/db/schema.sql, backend/database/models.py, backend/database/repository.py
+- Outputs: .delivery/tasks/TASK-020/DATABASE-DESIGN.md, .delivery/tasks/TASK-020/TASK-RESULT.md
+- Completion gate: Xác định contract dữ liệu và storage business-level cho media import thật, metadata source/frame, bbox samples, nhãn hệ thống, nhãn custom, soft delete/restore, uniqueness tên nhãn và sample_count mà chưa sửa schema production.
+- Verification method: python D:\Skill\SKILLs\design-database\scripts\validate_database_design.py D:\Hilab\Project34 TASK-020
+- Parallelizable: no
+- Parallel-safety notes: Wave 1 tuần tự vì mọi quyết định DB/storage và migration direction phải chốt trước API/backend; không task nào khác trong phase được sửa schema ở wave này.
+- Write scope: .delivery/tasks/TASK-020/
+- Wave: 1
+- Status: planned
+
+### Wave 2 (API & UI/UX Feature Contracts)
+
+#### TASK-021 Thiết kế API Upload/Source/Label/Sample/Frame/Sync
+- Task type: feature-design
+- Scope: feature
+- Module: api-gateway
+- Linked requirements: REQ-005, REQ-007, CR-004
+- Capability: api-design
+- Dependencies: TASK-020
+- Inputs: .delivery/REQUIREMENTS.md, .delivery/tasks/TASK-020/DATABASE-DESIGN.md, .delivery/API-CONTRACT.md, docs/contracts/api/api-schema.json, backend/app/api/v1/dataset.py, frontend/src/services/api.ts
+- Outputs: .delivery/tasks/TASK-021/API-CONTRACT.md, .delivery/tasks/TASK-021/TASK-RESULT.md
+- Completion gate: Thiết kế xong API feature contract cho upload/import media, dataset sources, custom label CRUD/soft delete/restore, bbox sample CRUD, video frame retrieval và sync zone rules, gồm schema request/response đủ để backend/frontend triển khai sau.
+- Verification method: python D:\Skill\SKILLs\design-api\scripts\validate_api_design.py D:\Hilab\Project34 TASK-021 --scope feature
+- Parallelizable: yes
+- Parallel-safety notes: Chỉ ghi artifact design riêng của TASK-021; không cập nhật `.delivery/API-CONTRACT.md` hoặc docs/contracts/api trong bước này.
+- Write scope: .delivery/tasks/TASK-021/
+- Wave: 2
+- Status: planned
+
+#### TASK-022 Thiết kế UI/UX cho Cài đặt > Nhãn đối tượng
+- Task type: feature-design
+- Scope: feature
+- Module: web-ui
+- Linked requirements: REQ-005, REQ-007, CR-004
+- Capability: ui-ux-design
+- Dependencies: TASK-020
+- Inputs: .delivery/REQUIREMENTS.md, .delivery/DOMAIN-MODEL.md, .delivery/tasks/TASK-020/DATABASE-DESIGN.md, frontend/src/pages/ZoneTagSettings.tsx, frontend/src/context/AppContext.tsx, frontend/src/components/zone/PolygonZoneEditor.tsx
+- Outputs: .delivery/tasks/TASK-022/UI-UX-CONTRACT.md, .delivery/tasks/TASK-022/TASK-RESULT.md
+- Completion gate: Thiết kế xong workflow UI cho import media thật, scrub frame video, bbox create/edit/delete, label system/custom states, confirm delete, restore, batch validation errors và sync feedback mà chưa sửa frontend production.
+- Verification method: python D:\Skill\SKILLs\design-ui-ux\scripts\validate_ui_ux_design.py D:\Hilab\Project34 TASK-022
+- Parallelizable: yes
+- Parallel-safety notes: Có thể chạy song song với TASK-021 vì chỉ ghi artifact riêng và dùng cùng DATABASE-DESIGN làm input.
+- Write scope: .delivery/tasks/TASK-022/
+- Wave: 2
+- Status: planned
+
+### Wave 3 (Backend Implementation)
+
+#### TASK-023 Backend Object Labeling Thật theo Design đã Duyệt
+- Task type: implementation
+- Scope: feature
+- Module: api-gateway
+- Linked requirements: REQ-005, REQ-007, CR-004
+- Capability: backend-implementation
+- Dependencies: TASK-020, TASK-021
+- Inputs: .delivery/tasks/TASK-020/DATABASE-DESIGN.md, .delivery/tasks/TASK-021/API-CONTRACT.md, backend/app/api/v1/dataset.py, backend/database/models.py, backend/database/repository.py
+- Outputs: backend dataset API/storage implementation, backend tests, .delivery/tasks/TASK-023/TASK-RESULT.md
+- Completion gate: Backend lưu được media import và metadata, quản lý nhãn hệ thống/custom, lưu/tải/sửa/xóa bbox samples, soft delete/restore nhãn custom, validate batch atomically, sync custom labels vào zone rules mặc định `cấm`, và không yêu cầu AI realtime nhận diện class custom mới.
+- Verification method: python -m pytest backend/tests/test_dataset_object_labeling.py backend/tests/test_dataset_zone_sync.py -q
+- Parallelizable: no
+- Parallel-safety notes: Chạy sau design DB/API đã duyệt; trong phase này không có task backend song song ghi cùng `backend/app/` hoặc `backend/database/`.
+- Write scope: backend/app/api/v1/dataset.py, backend/database/, backend/tests/, .delivery/tasks/TASK-023/
+- Wave: 3
+- Status: planned
+
+### Wave 4 (Frontend Implementation)
+
+#### TASK-024 Frontend Cài đặt > Nhãn đối tượng theo Design đã Duyệt
+- Task type: implementation
+- Scope: feature
+- Module: web-ui
+- Linked requirements: REQ-005, REQ-007, CR-004
+- Capability: frontend-implementation
+- Dependencies: TASK-021, TASK-022, TASK-023
+- Inputs: .delivery/tasks/TASK-021/API-CONTRACT.md, .delivery/tasks/TASK-022/UI-UX-CONTRACT.md, .delivery/tasks/TASK-023/TASK-RESULT.md, frontend/src/pages/ZoneTagSettings.tsx, frontend/src/context/AppContext.tsx, frontend/src/services/api.ts, frontend/src/types/index.ts
+- Outputs: frontend object-labeling integration updates, frontend tests/build evidence, .delivery/tasks/TASK-024/TASK-RESULT.md
+- Completion gate: UI `Nhãn đối tượng` dùng API thật thay mock/local state cho media source, labels và bbox samples; reload thấy dữ liệu persisted; xử lý confirm delete, restore, batch validation, sample edit và sync trạng thái zone rules theo acceptance CR-004.
+- Verification method: npm --prefix frontend run build
+- Parallelizable: no
+- Parallel-safety notes: Chạy sau backend để kiểm thử flow thật; không song song với task khác ghi `frontend/src/`.
+- Write scope: frontend/src/pages/ZoneTagSettings.tsx, frontend/src/context/AppContext.tsx, frontend/src/services/api.ts, frontend/src/types/, frontend/src/components/zone/, .delivery/tasks/TASK-024/
+- Wave: 4
+- Status: planned
+
+### Wave 5 (CR-004 End-to-End Verification)
+
+#### TASK-025 Verification End-to-End cho CR-004 Object Labeling
+- Task type: verification
+- Scope: feature
+- Module: web-ui
+- Linked requirements: REQ-005, REQ-007, CR-004
+- Capability: verify-feature
+- Dependencies: TASK-020, TASK-021, TASK-022, TASK-023, TASK-024
+- Inputs: .delivery/REQUIREMENTS.md, .delivery/tasks/TASK-020/DATABASE-DESIGN.md, .delivery/tasks/TASK-021/API-CONTRACT.md, .delivery/tasks/TASK-022/UI-UX-CONTRACT.md, .delivery/tasks/TASK-023/TASK-RESULT.md, .delivery/tasks/TASK-024/TASK-RESULT.md, backend/frontend implementation under backend/ and frontend/src/
+- Outputs: .delivery/tasks/TASK-025/TEST-REPORT.md, .delivery/tasks/TASK-025/TASK-RESULT.md, bug records if verification fails
+- Completion gate: Xác minh end-to-end import ảnh/video thật, chọn frame video, vẽ/sửa/xóa bbox, tạo/sửa/soft delete/restore nhãn custom, khóa nhãn hệ thống, reload persisted samples từ DB và sync zone rules mặc định `cấm`.
+- Verification method: python D:\Skill\SKILLs\verify-feature\scripts\validate_feature_verification.py D:\Hilab\Project34 TASK-025
+- Parallelizable: no
+- Parallel-safety notes: Verification chạy sau toàn bộ design và implementation của CR-004; không sửa production code.
+- Write scope: .delivery/tasks/TASK-025/
+- Wave: 5
+- Status: planned
 
 
 ---
@@ -392,11 +518,12 @@ Hệ thống được tổ chức theo 3 Phase chính:
 - REQ-002 -> TASK-001, TASK-002, TASK-003, TASK-004, TASK-005, TASK-010, TASK-015, TASK-016, TASK-017, TASK-018, TASK-019
 - REQ-003 -> TASK-002, TASK-004, TASK-008, TASK-014, TASK-015
 - REQ-004 -> TASK-007, TASK-015, TASK-016, TASK-017, TASK-019
-- REQ-005 -> TASK-002, TASK-004, TASK-005, TASK-012, TASK-015, TASK-016, TASK-017, TASK-018, TASK-019
+- REQ-005 -> TASK-002, TASK-004, TASK-005, TASK-012, TASK-015, TASK-016, TASK-017, TASK-018, TASK-019, TASK-020, TASK-021, TASK-022, TASK-023, TASK-024, TASK-025
 - REQ-006 -> TASK-003, TASK-006, TASK-012, TASK-015
-- REQ-007 -> TASK-007, TASK-012, TASK-015
+- REQ-007 -> TASK-007, TASK-012, TASK-015, TASK-020, TASK-021, TASK-022, TASK-023, TASK-024, TASK-025
 - REQ-008 -> TASK-002, TASK-013, TASK-015
 - REQ-009 -> TASK-002, TASK-008, TASK-014, TASK-015, TASK-016, TASK-017, TASK-018, TASK-019
 - CR-001 -> TASK-002, TASK-005, TASK-006, TASK-007, TASK-010, TASK-012, TASK-015
 - CR-002 -> TASK-001, TASK-002, TASK-003, TASK-004, TASK-005, TASK-006, TASK-007, TASK-008, TASK-009, TASK-010, TASK-012, TASK-013, TASK-014, TASK-015
 - CR-003 -> TASK-016, TASK-017, TASK-018, TASK-019
+- CR-004 -> TASK-020, TASK-021, TASK-022, TASK-023, TASK-024, TASK-025

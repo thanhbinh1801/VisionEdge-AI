@@ -1,9 +1,9 @@
 ---
 artifact: API-CONTRACT.md
-version: 1.2.0
+version: 1.3.0
 owner: design-api
 status: approved
-updated_at: "2026-08-20T18:10:00+07:00"
+updated_at: "2026-08-24T19:54:12+07:00"
 linked_requirements:
   - REQ-001
   - REQ-002
@@ -17,11 +17,12 @@ linked_requirements:
   - CR-001
   - CR-002
   - CR-003
+  - CR-004
 ---
 
-# Hợp Đồng REST API & WebSocket Event Payload (SentriAI Mini — CR-001, CR-002 & CR-003)
+# Hợp Đồng REST API & WebSocket Event Payload (SentriAI Mini — CR-001, CR-002, CR-003 & CR-004)
 
-Tài liệu quy định chuẩn hợp đồng REST API Foundation toàn cục và giao thức WebSocket real-time cho hệ thống Giám sát Camera AI (SentriAI Mini), hỗ trợ đầy đủ quy tắc nghiệp vụ CR-001 (Phân loại 8 nhóm đối tượng, Xe quen/Xe lạ, SVG Canvas 4 thao tác, BBox Dataset Collector), CR-002 (React Framework & YOLOv26) và CR-003 (Area realtime metadata lane + in-memory zone cache).
+Tài liệu quy định chuẩn hợp đồng REST API Foundation toàn cục và giao thức WebSocket real-time cho hệ thống Giám sát Camera AI (SentriAI Mini), hỗ trợ đầy đủ quy tắc nghiệp vụ CR-001 (Phân loại 8 nhóm đối tượng, Xe quen/Xe lạ, SVG Canvas 4 thao tác, BBox Dataset Collector), CR-002 (React Framework & YOLOv26), CR-003 (Area realtime metadata lane + in-memory zone cache), và CR-004 (real object labeling flow với media import, persisted bbox samples, label CRUD/soft delete/restore, và sync zone rules).
 
 ---
 
@@ -35,10 +36,19 @@ Tài liệu quy định chuẩn hợp đồng REST API Foundation toàn cục v�
 | **Zones** | `POST` | `/api/v1/zones` | Tạo Zone đa giác polygon mới. | Admin |
 | **Zones** | `PUT` | `/api/v1/zones/{id}` | Cập nhật tọa độ đỉnh polygon (Vertex handles) hoặc đổi quy tắc loại đối tượng. | Admin |
 | **Zones** | `DELETE` | `/api/v1/zones/{id}` | Xóa Zone đa giác polygon. | Admin |
-| **Object Labels**| `GET` | `/api/v1/labels` | Lấy danh sách nhãn đối tượng Master Catalog (`Container`, `Xe tải`, `Xe nâng`, `Xe cẩu`, `Xe con`, `Xe máy`, `Xe đạp`, `Người` + Custom). | Viewer / Admin |
-| **Object Labels**| `POST` | `/api/v1/labels` | Thêm nhãn đối tượng custom mới (Phân loại `nguoi` / `xe`). Tự động đồng bộ sang mọi Zone. | Admin |
-| **Object Labels**| `DELETE` | `/api/v1/labels/{id}` | Xóa nhãn đối tượng custom. | Admin |
-| **Samples** | `POST` | `/api/v1/annotation-samples` | Lưu mẫu Bounding Box đã khoanh trên hình ảnh / video frame. | Admin |
+| **Dataset Labels** | `GET` | `/api/v1/dataset/labels?include_deleted=false` | Lấy catalog nhãn đối tượng gồm 8 system labels và custom labels active/deleted tùy filter. | Viewer / Admin |
+| **Dataset Labels** | `POST` | `/api/v1/dataset/labels` | Tạo custom label mới, uniqueness không phân biệt hoa/thường, sync vào mọi zone mặc định `forbidden`. | Admin |
+| **Dataset Labels** | `PUT` | `/api/v1/dataset/labels/{label_id}` | Đổi tên/category custom label và cập nhật xuyên suốt zone rules. | Admin |
+| **Dataset Labels** | `DELETE` | `/api/v1/dataset/labels/{label_id}` | Soft delete custom label nếu không còn nằm trong zone rules; system labels bị khóa. | Admin |
+| **Dataset Labels** | `POST` | `/api/v1/dataset/labels/{label_id}/restore` | Restore custom label và sync lại vào mọi zone mặc định `forbidden`. | Admin |
+| **Dataset Sources** | `GET` | `/api/v1/dataset/sources` | List media source đã import, có pagination và metadata file/frame. | Viewer / Admin |
+| **Dataset Sources** | `POST` | `/api/v1/dataset/sources` | Upload ảnh/video bằng `multipart/form-data`; backend lưu file và metadata vào managed storage. | Admin |
+| **Dataset Sources** | `GET` | `/api/v1/dataset/sources/{source_id}/frame` | Lấy JPEG frame từ imported source theo `frame_index` hoặc `timestamp`. | Viewer / Admin |
+| **Dataset Samples** | `GET` | `/api/v1/dataset/samples` | List bbox samples theo `source_id`, `frame_index`, hoặc `label_id`. | Viewer / Admin |
+| **Dataset Samples** | `POST` | `/api/v1/dataset/samples:batch` | Lưu batch bbox samples atomically; toàn bộ batch fail nếu có sample invalid. | Admin |
+| **Dataset Samples** | `PUT` | `/api/v1/dataset/samples/{sample_id}` | Sửa bbox geometry, frame hoặc label của sample đã lưu. | Admin |
+| **Dataset Samples** | `DELETE` | `/api/v1/dataset/samples/{sample_id}` | Xóa sample và recompute `sample_count` của label liên quan. | Admin |
+| **Dataset Sync** | `POST` | `/api/v1/dataset/sync-zones` | Đồng bộ active custom labels vào zone rules và refresh zone cache. | Admin |
 | **Events** | `GET` | `/api/v1/events?severity_level={level}` | Lấy nhật ký sự kiện LPR và sự kiện khu vực bãi kiểm. | Viewer / Admin |
 | **Chatbot** | `POST` | `/api/v1/chatbot/query` | Truy vấn trợ lý AI tiếng Việt, trả về kết quả số liệu kèm đính kèm video clip 10s. | Viewer / Admin |
 
@@ -137,3 +147,127 @@ Tài liệu quy định chuẩn hợp đồng REST API Foundation toàn cục v�
 ### 3.5 Alert Derivation Rule
 - `ALERT_LEVEL_3_NOTIFICATION` chỉ được phát từ event lane đã qua severity classification và cooldown.
 - `AREA_FRAME_METADATA` có thể chứa object đang ở trạng thái vi phạm, nhưng payload này không tự tương đương với alert đã được xác nhận.
+
+### 3.6 CR-004 Dataset Object Labeling Schemas
+
+Tất cả JSON endpoint của `/api/v1/dataset/*` dùng envelope chuẩn:
+
+```json
+{
+  "success": true,
+  "data": {},
+  "error": null,
+  "meta": {
+    "timestamp": "2026-08-24T19:40:41+07:00",
+    "request_id": "req_abc123"
+  }
+}
+```
+
+#### ObjectLabel
+
+```json
+{
+  "id": "lbl_system_forklift",
+  "label_key": "forklift",
+  "label_name": "Xe nâng",
+  "label_type": "system",
+  "category": "vehicle_shape",
+  "sample_count": 41,
+  "is_active": true,
+  "deleted_at": null,
+  "created_at": "2026-08-24T19:40:41+07:00",
+  "updated_at": "2026-08-24T19:40:41+07:00"
+}
+```
+
+Rules:
+- `label_type = system`: 8 labels mặc định, không rename/delete/restore.
+- `label_type = custom`: được create/rename/soft delete/restore.
+- `label_key` là key chuẩn hóa để uniqueness không phân biệt hoa/thường.
+- Custom label mới hoặc restore phải được sync vào mọi zone với trạng thái mặc định `forbidden`.
+
+#### DatasetSource
+
+```json
+{
+  "id": "src_01",
+  "name": "yard-ca-chieu.mp4",
+  "kind": "video",
+  "public_url": "/media/dataset/src_01/yard-ca-chieu.mp4",
+  "original_filename": "yard-ca-chieu.mp4",
+  "mime_type": "video/mp4",
+  "file_size_bytes": 38400000,
+  "sha256": "64 lowercase hex chars",
+  "duration_seconds": 272.0,
+  "total_frames": 1360,
+  "fps": 5.0,
+  "width": 1920,
+  "height": 1080,
+  "import_status": "ready",
+  "import_error": null,
+  "created_at": "2026-08-24T19:40:41+07:00",
+  "updated_at": "2026-08-24T19:40:41+07:00"
+}
+```
+
+Upload source dùng `multipart/form-data`, nhận `image/jpeg`, `image/png`, `video/mp4`, `video/quicktime`, tối đa 250 MB trong CR-004. Backend chỉ lưu file trong managed media storage, không nhận hoặc trả absolute filesystem path từ browser.
+
+#### BBoxSample
+
+```json
+{
+  "id": "bbox_01",
+  "label_id": "lbl_system_forklift",
+  "source_id": "src_01",
+  "frame_index": 45,
+  "frame_timestamp_seconds": 1.5,
+  "bbox": { "x": 20.5, "y": 30.0, "w": 40.0, "h": 50.0 },
+  "coordinate_space": "percent_0_100",
+  "label": {
+    "id": "lbl_system_forklift",
+    "label_key": "forklift",
+    "label_name": "Xe nâng"
+  },
+  "created_at": "2026-08-24T19:40:41+07:00",
+  "updated_at": "2026-08-24T19:40:41+07:00"
+}
+```
+
+Rules:
+- Batch save/update/delete samples phải atomic theo request.
+- BBox dùng `percent_0_100`; `x/y` trong `[0,100]`, `w/h > 0`, và box không vượt biên canvas.
+- Video samples cần `frame_index`; image source normalize về frame `0`.
+- `sample_count` của label là derived data, phải recompute/adjust cùng transaction khi sample thay đổi.
+
+#### ZoneSyncResult
+
+```json
+{
+  "synced_labels": ["ao_phan_quang"],
+  "affected_zones": ["zK1", "zK2", "zK3"],
+  "default_rule": "forbidden",
+  "cache": [
+    {
+      "camera_id": "BAI-KIEM",
+      "zone_version": 18,
+      "cache_status": "hot",
+      "refreshed_at": "2026-08-24T19:40:41+07:00"
+    }
+  ]
+}
+```
+
+### 3.7 CR-004 Error Codes
+
+Các error code bổ sung cho dataset/object-labeling:
+- `VALIDATION_ERROR`: request hợp JSON schema nhưng sai rule nghiệp vụ.
+- `DUPLICATE_LABEL_NAME`: create/rename/restore trùng label name không phân biệt hoa/thường.
+- `SYSTEM_LABEL_LOCKED`: cố sửa/xóa/restore system label.
+- `LABEL_IN_USE_BY_ZONE`: soft delete bị chặn vì label vẫn nằm trong zone rules.
+- `LABEL_INACTIVE`: annotate bằng deleted/inactive label.
+- `SOURCE_NOT_READY`: source chưa ready hoặc import failed.
+- `UNSUPPORTED_MEDIA_TYPE`: MIME type/codec không hỗ trợ.
+- `UPLOAD_TOO_LARGE`: file vượt 250 MB.
+- `FRAME_NOT_AVAILABLE`: frame index/timestamp nằm ngoài media source.
+- `ZONE_CACHE_REFRESH_FAILED`: DB đã commit sync nhưng refresh runtime cache fail; client có thể retry sync.

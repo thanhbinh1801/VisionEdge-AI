@@ -1,6 +1,6 @@
 -- ====================================================================
 -- SentriAI Mini - Database Schema DDL (SQLite3)
--- Artifact: schema.sql (TASK-003 & TASK-006)
+-- Artifact: schema.sql (TASK-003, TASK-006 & CR-004 TASK-020)
 -- Target: SQLite 3.35+ with Foreign Keys & WAL Mode
 -- ====================================================================
 
@@ -80,46 +80,80 @@ CREATE TABLE IF NOT EXISTS events (
 );
 
 -- --------------------------------------------------------------------
--- 5. Custom Label Dataset Annotations Table (REQ-007, CR-001)
+-- 5. Object Label Catalog (REQ-005, REQ-007, CR-001, CR-004)
 -- --------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS custom_labels (
     id VARCHAR(64) PRIMARY KEY,
-    label_name VARCHAR(128) NOT NULL UNIQUE,
-    category VARCHAR(64) NOT NULL DEFAULT 'custom',
+    label_key VARCHAR(128) UNIQUE,
+    label_name VARCHAR(128) NOT NULL,
+    label_type VARCHAR(16) NOT NULL DEFAULT 'custom' CHECK (label_type IN ('system', 'custom')),
+    category VARCHAR(64) NOT NULL DEFAULT 'custom' CHECK (category IN ('person', 'vehicle_shape', 'custom')),
     sample_count INTEGER NOT NULL DEFAULT 0 CHECK (sample_count >= 0),
+    is_active BOOLEAN NOT NULL DEFAULT 1,
+    deleted_at DATETIME,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CHECK (length(trim(label_name)) > 0),
+    CHECK (label_key IS NULL OR length(trim(label_key)) > 0)
 );
 
 -- --------------------------------------------------------------------
--- 5b. Dataset Sources Table (REQ-007, CR-001)
+-- 5b. Dataset Sources Table (REQ-007, CR-001, CR-004)
 -- --------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS dataset_sources (
     id VARCHAR(64) PRIMARY KEY,
     name VARCHAR(128) NOT NULL,
     kind VARCHAR(16) NOT NULL CHECK (kind IN ('img', 'video')),
-    url VARCHAR(512) NOT NULL,
+    url VARCHAR(512),
+    storage_path VARCHAR(512),
+    public_url VARCHAR(512),
+    original_filename VARCHAR(255),
+    mime_type VARCHAR(128) CHECK (mime_type IN ('image/jpeg', 'image/png', 'video/mp4', 'video/quicktime')),
+    file_size_bytes INTEGER CHECK (file_size_bytes IS NULL OR file_size_bytes > 0),
+    sha256 VARCHAR(64) CHECK (sha256 IS NULL OR length(sha256) = 64),
     duration_seconds FLOAT,
     total_frames INTEGER,
-    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    fps FLOAT,
+    width INTEGER,
+    height INTEGER,
+    import_status VARCHAR(32) NOT NULL DEFAULT 'ready' CHECK (import_status IN ('processing', 'ready', 'failed')),
+    import_error TEXT,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CHECK (kind = 'img' OR total_frames IS NULL OR total_frames >= 0),
+    CHECK (duration_seconds IS NULL OR duration_seconds >= 0),
+    CHECK (fps IS NULL OR fps > 0),
+    CHECK (width IS NULL OR width > 0),
+    CHECK (height IS NULL OR height > 0)
 );
 
 -- --------------------------------------------------------------------
--- 5c. Bounding Box Dataset Samples Table (REQ-007, CR-001)
+-- 5c. Bounding Box Dataset Samples Table (REQ-007, CR-001, CR-004)
 -- --------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS bbox_samples (
     id VARCHAR(64) PRIMARY KEY,
     label_id VARCHAR(64) NOT NULL,
     source_id VARCHAR(64) NOT NULL,
     frame_index INTEGER,
+    frame_timestamp_seconds FLOAT,
     x FLOAT NOT NULL,
     y FLOAT NOT NULL,
     w FLOAT NOT NULL,
     h FLOAT NOT NULL,
-    category VARCHAR(32) NOT NULL CHECK (category IN ('person', 'vehicle_shape')),
-    label_name VARCHAR(128) NOT NULL,
+    coordinate_space VARCHAR(32) NOT NULL DEFAULT 'percent_0_100' CHECK (coordinate_space = 'percent_0_100'),
+    category VARCHAR(32) CHECK (category IN ('person', 'vehicle_shape', 'custom')),
+    label_name VARCHAR(128),
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (source_id) REFERENCES dataset_sources(id) ON DELETE CASCADE
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (source_id) REFERENCES dataset_sources(id) ON DELETE CASCADE,
+    CHECK (frame_index IS NULL OR frame_index >= 0),
+    CHECK (frame_timestamp_seconds IS NULL OR frame_timestamp_seconds >= 0),
+    CHECK (x >= 0 AND x <= 100),
+    CHECK (y >= 0 AND y <= 100),
+    CHECK (w > 0 AND w <= 100),
+    CHECK (h > 0 AND h <= 100),
+    CHECK (x + w <= 100),
+    CHECK (y + h <= 100)
 );
 
 -- --------------------------------------------------------------------
@@ -146,14 +180,22 @@ CREATE INDEX IF NOT EXISTS idx_events_camera_severity ON events(camera_id, sever
 CREATE INDEX IF NOT EXISTS idx_events_license_plate ON events(license_plate);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_vehicles_license_plate ON vehicles(license_plate);
 CREATE INDEX IF NOT EXISTS idx_zones_camera_id ON zones(camera_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_object_labels_label_key ON custom_labels(label_key);
+CREATE INDEX IF NOT EXISTS idx_object_labels_active_type_key ON custom_labels(is_active, label_type, label_key);
+CREATE INDEX IF NOT EXISTS idx_dataset_sources_created_at ON dataset_sources(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_dataset_sources_sha256 ON dataset_sources(sha256);
 CREATE INDEX IF NOT EXISTS idx_bbox_samples_label ON bbox_samples(label_id);
 CREATE INDEX IF NOT EXISTS idx_bbox_samples_source ON bbox_samples(source_id);
+CREATE INDEX IF NOT EXISTS idx_bbox_samples_source_frame ON bbox_samples(source_id, frame_index, created_at DESC);
 
 -- --------------------------------------------------------------------
 -- Initial Seed Data
 -- --------------------------------------------------------------------
 INSERT OR IGNORE INTO schema_migrations (version, description)
 VALUES ('1.1.0', 'Updated database schema with dataset_sources and bbox_samples for CR-001');
+
+INSERT OR IGNORE INTO schema_migrations (version, description)
+VALUES ('1.2.0-cr004-object-labeling', 'CR-004 real object labeling storage contract with system/custom labels, media metadata, soft delete/restore, label references, and bbox constraints');
 
 INSERT OR IGNORE INTO cameras (id, name, location, stream_url, fps)
 VALUES 
@@ -163,6 +205,17 @@ VALUES
 
 INSERT OR IGNORE INTO kpi_realtime_cache (id, gate_vehicles_total, gate_lpr_success, gate_lpr_failed, gate_avg_confidence, area_active_objects, area_zone_violations, area_active_machinery, area_total_zones)
 VALUES ('GLOBAL_KPI', 128, 120, 8, 94.5, 14, 3, 5, 2);
+
+INSERT OR IGNORE INTO custom_labels (id, label_key, label_name, label_type, category, sample_count, is_active)
+VALUES
+    ('lbl_system_container', 'container', 'Container', 'system', 'vehicle_shape', 0, 1),
+    ('lbl_system_truck', 'truck', 'Xe tải', 'system', 'vehicle_shape', 0, 1),
+    ('lbl_system_forklift', 'forklift', 'Xe nâng', 'system', 'vehicle_shape', 0, 1),
+    ('lbl_system_crane', 'crane', 'Xe cẩu', 'system', 'vehicle_shape', 0, 1),
+    ('lbl_system_car', 'car', 'Xe con', 'system', 'vehicle_shape', 0, 1),
+    ('lbl_system_motorbike', 'motorbike', 'Xe máy', 'system', 'vehicle_shape', 0, 1),
+    ('lbl_system_bicycle', 'bicycle', 'Xe đạp', 'system', 'vehicle_shape', 0, 1),
+    ('lbl_system_person', 'person', 'Người', 'system', 'person', 0, 1);
 
 -- Toạ độ polygon là phần trăm 0-100 của khung hình, vẽ cho bộ clip CCTV cảng
 -- HATECO Hải Phòng hiện hành. Nguồn chính tắc của bộ toạ độ này là
