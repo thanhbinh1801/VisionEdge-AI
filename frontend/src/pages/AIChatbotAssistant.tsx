@@ -1,26 +1,106 @@
-import React, { useState } from 'react';
-import { useApp } from '../context/AppContext';
+import React, { useEffect, useRef, useState } from 'react';
+import { AlertTriangle, Car, Download, Loader2, Send, ShieldAlert, Truck, Video } from 'lucide-react';
+import { VideoModal } from '../components/common/VideoModal';
+
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api/v1';
+
+/** Hình dạng phản hồi của POST /api/v1/assistant/query (TASK-011). */
+interface AssistantAnswer {
+  answer: string;
+  sql_query?: string | null;
+  event_id?: string | null;
+  clip_url?: string | null;
+}
+
+interface ChatMessage {
+  id: string;
+  role: 'user' | 'ai';
+  text: string;
+  sqlQuery?: string | null;
+  eventId?: string | null;
+  clipUrl?: string | null;
+  /** Đánh dấu bong bóng lỗi để tô khác màu và gắn role="alert". */
+  failed?: boolean;
+}
+
+const GREETING: ChatMessage = {
+  id: 'm-init',
+  role: 'ai',
+  text:
+    'Xin chào! Tôi trả lời các câu hỏi về sự kiện đã ghi nhận trong cơ sở dữ liệu. ' +
+    'Câu trả lời về một sự kiện cụ thể sẽ kèm đoạn video 10 giây làm bằng chứng.',
+};
+
+const PROMPT_CHIPS = [
+  { icon: ShieldAlert, label: 'Hôm nay có bao nhiêu vi phạm?' },
+  { icon: Car, label: 'Có xe máy nào vào khu vực cấm không?' },
+  { icon: Truck, label: 'Xe nâng hoạt động thế nào ở bãi kiểm?' },
+];
 
 export const AIChatbotAssistant: React.FC = () => {
-  const { chatMessages, sendChatMessage } = useApp();
-  const [draft, setDraft] = useState<string>('');
+  const [messages, setMessages] = useState<ChatMessage[]>([GREETING]);
+  const [draft, setDraft] = useState('');
+  const [pending, setPending] = useState(false);
+  const [clipUrl, setClipUrl] = useState<string | null>(null);
+  const logRef = useRef<HTMLDivElement>(null);
 
-  const suggestions = [
-    'Hôm nay có bao nhiêu xe lạ vào?',
-    'Có xe máy hay xe hơi nào vào khu vực cấm không?',
-    'Xe nâng hoạt động thế nào hôm nay?',
-  ];
+  // Cuộn xuống tin nhắn mới nhất. Đặt trong useEffect vì đụng tới DOM thật.
+  useEffect(() => {
+    const log = logRef.current;
+    if (log) log.scrollTop = log.scrollHeight;
+  }, [messages, pending]);
 
-  const handleSend = () => {
-    if (!draft.trim()) return;
-    sendChatMessage(draft);
+  const ask = async (question: string) => {
+    const text = question.trim();
+    if (!text || pending) return;
+
+    setMessages((prev) => [...prev, { id: `user-${Date.now()}`, role: 'user', text }]);
     setDraft('');
+    setPending(true);
+
+    try {
+      const res = await fetch(`${API_BASE_URL}/assistant/query`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query: text }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data: AssistantAnswer = await res.json();
+
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: `ai-${Date.now()}`,
+          role: 'ai',
+          text: data.answer,
+          sqlQuery: data.sql_query,
+          eventId: data.event_id,
+          clipUrl: data.clip_url,
+        },
+      ]);
+    } catch (error) {
+      // Không nuốt lỗi thành câu trả lời trông bình thường: người dùng phải phân
+      // biệt được "không có sự kiện nào" với "không gọi được backend".
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: `err-${Date.now()}`,
+          role: 'ai',
+          failed: true,
+          text:
+            'Không kết nối được dịch vụ hỏi đáp. ' +
+            (error instanceof Error ? error.message : 'Lỗi không xác định.'),
+        },
+      ]);
+    } finally {
+      setPending(false);
+    }
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') {
       e.preventDefault();
-      handleSend();
+      ask(draft);
     }
   };
 
@@ -36,8 +116,11 @@ export const AIChatbotAssistant: React.FC = () => {
         boxSizing: 'border-box',
       }}
     >
-      {/* Chat Messages Log */}
       <div
+        ref={logRef}
+        role="log"
+        aria-live="polite"
+        aria-label="Lịch sử hỏi đáp"
         style={{
           flex: 1,
           overflow: 'auto',
@@ -47,296 +130,200 @@ export const AIChatbotAssistant: React.FC = () => {
           padding: '6px 2px',
         }}
       >
-        {chatMessages.map((m) => {
-          if (m.role === 'user') {
-            return (
-              <div
-                key={m.id}
-                style={{
-                  alignSelf: 'flex-end',
-                  maxWidth: '70%',
-                  background: 'var(--acc)',
-                  color: '#fff',
-                  fontSize: '13.5px',
-                  lineHeight: 1.5,
-                  padding: '11px 15px',
-                  borderRadius: '15px 15px 4px 15px',
-                  animation: 'msgIn .25s ease',
-                }}
-              >
-                {m.text}
-              </div>
-            );
-          }
-
-          return (
-            <div key={m.id} style={{ alignSelf: 'flex-start', maxWidth: '86%', animation: 'msgIn .25s ease' }}>
+        {messages.map((m) =>
+          m.role === 'user' ? (
+            <div
+              key={m.id}
+              style={{
+                alignSelf: 'flex-end',
+                maxWidth: '70%',
+                background: 'var(--acc)',
+                color: '#fff',
+                fontSize: '13.5px',
+                lineHeight: 1.5,
+                padding: '11px 15px',
+                borderRadius: '15px 15px 4px 15px',
+                animation: 'msgIn .25s ease',
+              }}
+            >
+              {m.text}
+            </div>
+          ) : (
+            <div
+              key={m.id}
+              role={m.failed ? 'alert' : undefined}
+              style={{ alignSelf: 'flex-start', maxWidth: '86%', animation: 'msgIn .25s ease' }}
+            >
               <div style={{ display: 'flex', alignItems: 'center', gap: '7px', marginBottom: '6px' }}>
                 <span
                   style={{
                     width: '22px',
                     height: '22px',
                     borderRadius: '7px',
-                    background: 'linear-gradient(145deg,#2f9bff,#1361c9)',
+                    background: m.failed
+                      ? 'linear-gradient(145deg,#ff6b6b,#c92a2a)'
+                      : 'linear-gradient(145deg,#2f9bff,#1361c9)',
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
+                    color: '#fff',
+                    flex: 'none',
                   }}
                 >
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.2">
-                    <path d="M12 3v4M12 17v4M3 12h4M17 12h4" />
-                  </svg>
+                  {m.failed ? <AlertTriangle size={13} /> : <ShieldAlert size={13} />}
                 </span>
-                <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--ink3)' }}>Trợ lý sự kiện</span>
+                <span style={{ fontSize: '11.5px', color: 'var(--ink3)', fontWeight: 600 }}>
+                  {m.failed ? 'Lỗi kết nối' : 'Trợ lý SentriAI'}
+                </span>
               </div>
 
               <div
                 style={{
                   background: 'var(--card)',
-                  border: '1px solid var(--line)',
+                  border: `1px solid ${m.failed ? 'var(--p0)' : 'var(--line2)'}`,
+                  color: m.failed ? 'var(--p0)' : 'var(--ink)',
                   fontSize: '13.5px',
-                  lineHeight: 1.6,
-                  padding: '13px 16px',
+                  lineHeight: 1.55,
+                  padding: '11px 15px',
                   borderRadius: '4px 15px 15px 15px',
-                  color: 'var(--ink)',
+                  whiteSpace: 'pre-line',
                 }}
               >
                 {m.text}
               </div>
 
-              {/* Embedded 10s Video Evidence Clip Card */}
-              {m.clip && (
+              {m.sqlQuery && (
+                <details style={{ marginTop: '6px' }}>
+                  <summary style={{ fontSize: '10.5px', color: 'var(--ink3)', cursor: 'pointer' }}>
+                    Truy vấn đã dùng
+                  </summary>
+                  <code
+                    style={{
+                      display: 'block',
+                      marginTop: '4px',
+                      padding: '8px 10px',
+                      background: 'var(--panel)',
+                      border: '1px solid var(--line)',
+                      borderRadius: '8px',
+                      fontSize: '11px',
+                      color: 'var(--ink2)',
+                      overflowX: 'auto',
+                    }}
+                  >
+                    {m.sqlQuery}
+                  </code>
+                </details>
+              )}
+
+              {/* Chứng cứ chỉ hiện khi backend thực sự trả về clip. Không có thì
+                  không dựng thẻ video rỗng để câu trả lời trông đầy đủ hơn. */}
+              {m.clipUrl && (
                 <div
                   style={{
                     marginTop: '10px',
-                    background: 'var(--panel)',
-                    border: '1px solid var(--line2)',
-                    borderRadius: '13px',
-                    overflow: 'hidden',
-                    maxWidth: '430px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                    flexWrap: 'wrap',
                   }}
                 >
-                  <div
+                  <button
+                    type="button"
+                    onClick={() => setClipUrl(m.clipUrl ?? null)}
+                    aria-label={`Xem clip 10 giây của sự kiện ${m.eventId ?? ''}`.trim()}
                     style={{
-                      position: 'relative',
-                      aspectRatio: '16/9',
-                      background:
-                        'radial-gradient(120% 90% at 50% 18%, #1a2129 0%, #0c0f13 60%, #07090b 100%)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      fontSize: '12px',
+                      padding: '7px 13px',
+                      borderRadius: '20px',
+                      border: '1px solid var(--line2)',
+                      background: 'var(--card)',
+                      color: 'var(--ink)',
+                      cursor: 'pointer',
+                      fontFamily: 'inherit',
                     }}
                   >
-                    <div
-                      style={{
-                        position: 'absolute',
-                        left: 0,
-                        right: 0,
-                        bottom: 0,
-                        height: '56%',
-                        background: 'linear-gradient(#0c1014,#060809)',
-                        backgroundImage:
-                          'repeating-linear-gradient(90deg, rgba(255,255,255,.05) 0 1px, transparent 1px 13%)',
-                      }}
-                    />
+                    <Video size={13} /> Xem clip 10s
+                  </button>
 
-                    <div
-                      style={{
-                        position: 'absolute',
-                        left: '28%',
-                        top: '38%',
-                        width: '44%',
-                        height: '44%',
-                        background: `linear-gradient(160deg, ${m.clip.tint || '#2a4a6b'}, #11161c)`,
-                        borderRadius: '5px',
-                      }}
-                    />
+                  <a
+                    href={m.clipUrl}
+                    download
+                    aria-label={`Tải clip 10 giây của sự kiện ${m.eventId ?? ''}`.trim()}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      fontSize: '12px',
+                      padding: '7px 13px',
+                      borderRadius: '20px',
+                      border: '1px solid var(--line2)',
+                      background: 'var(--card)',
+                      color: 'var(--ink2)',
+                      textDecoration: 'none',
+                      fontFamily: 'inherit',
+                    }}
+                  >
+                    <Download size={13} /> Tải clip
+                  </a>
 
-                    <div
-                      style={{
-                        position: 'absolute',
-                        left: '27%',
-                        top: '37%',
-                        width: '46%',
-                        height: '46%',
-                        border: `1.5px solid ${m.clip.boxColor}`,
-                      }}
-                    >
-                      <span
-                        style={{
-                          position: 'absolute',
-                          left: '-1px',
-                          top: '-18px',
-                          background: m.clip.boxColor,
-                          color: '#06080a',
-                          fontSize: '9.5px',
-                          fontWeight: 700,
-                          padding: '1px 7px',
-                          borderRadius: '3px',
-                          whiteSpace: 'nowrap',
-                        }}
-                      >
-                        {m.clip.boxLabel}
-                      </span>
-                    </div>
-
-                    <div
-                      style={{
-                        position: 'absolute',
-                        left: '50%',
-                        top: '50%',
-                        transform: 'translate(-50%,-50%)',
-                        width: '44px',
-                        height: '44px',
-                        borderRadius: '50%',
-                        background: 'rgba(0,0,0,.55)',
-                        backdropFilter: 'blur(3px)',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        cursor: 'pointer',
-                        border: '1.5px solid rgba(255,255,255,.5)',
-                      }}
-                    >
-                      <svg width="17" height="17" viewBox="0 0 24 24" fill="#fff">
-                        <path d="M8 5v14l11-7z" />
-                      </svg>
-                    </div>
-
-                    <div
-                      style={{
-                        position: 'absolute',
-                        left: '9px',
-                        top: '8px',
-                        background: 'rgba(0,0,0,.5)',
-                        color: '#e3e7ea',
-                        fontSize: '9.5px',
-                        padding: '2px 7px',
-                        borderRadius: '5px',
-                        fontFamily: "'IBM Plex Mono', monospace",
-                      }}
-                    >
-                      {m.clip.cam}
-                    </div>
-
-                    <div
-                      style={{
-                        position: 'absolute',
-                        right: '9px',
-                        top: '8px',
-                        background: 'var(--p0)',
-                        color: '#fff',
-                        fontSize: '9px',
-                        fontWeight: 700,
-                        padding: '2px 7px',
-                        borderRadius: '5px',
-                      }}
-                    >
-                      CLIP 10s
-                    </div>
-                  </div>
-
-                  <div style={{ padding: '10px 13px' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '9px', marginBottom: '8px' }}>
-                      <span
-                        style={{
-                          fontSize: '10.5px',
-                          fontFamily: "'IBM Plex Mono', monospace",
-                          color: 'var(--ink3)',
-                        }}
-                      >
-                        {m.clip.from}
-                      </span>
-                      <div
-                        style={{
-                          flex: 1,
-                          height: '4px',
-                          borderRadius: '3px',
-                          background: 'var(--raise)',
-                          position: 'relative',
-                        }}
-                      >
-                        <div
-                          style={{
-                            position: 'absolute',
-                            left: 0,
-                            top: 0,
-                            bottom: 0,
-                            width: '32%',
-                            background: 'var(--acc)',
-                            borderRadius: '3px',
-                          }}
-                        />
-                        <div
-                          style={{
-                            position: 'absolute',
-                            left: '32%',
-                            top: '50%',
-                            width: '11px',
-                            height: '11px',
-                            borderRadius: '50%',
-                            background: '#fff',
-                            transform: 'translate(-50%,-50%)',
-                          }}
-                        />
-                      </div>
-                      <span
-                        style={{
-                          fontSize: '10.5px',
-                          fontFamily: "'IBM Plex Mono', monospace",
-                          color: 'var(--ink3)',
-                        }}
-                      >
-                        {m.clip.to}
-                      </span>
-                    </div>
-
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                      <span style={{ fontSize: '11px', color: 'var(--ink2)', flex: 1 }}>{m.clip.title}</span>
-                      <button
-                        style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '6px',
-                          fontSize: '11px',
-                          fontWeight: 600,
-                          padding: '5px 11px',
-                          borderRadius: '8px',
-                          border: '1px solid var(--line2)',
-                          background: 'transparent',
-                          color: 'var(--ink)',
-                          cursor: 'pointer',
-                          fontFamily: 'inherit',
-                        }}
-                      >
-                        Tải 10s
-                      </button>
-                    </div>
-                  </div>
+                  {m.eventId && (
+                    <span style={{ fontSize: '10.5px', color: 'var(--ink3)' }}>
+                      Sự kiện {m.eventId}
+                    </span>
+                  )}
                 </div>
               )}
             </div>
-          );
-        })}
+          ),
+        )}
+
+        {pending && (
+          <div
+            style={{
+              alignSelf: 'flex-start',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+              fontSize: '12px',
+              color: 'var(--ink3)',
+            }}
+          >
+            <Loader2 size={13} className="animate-spin" /> Đang tra cứu sự kiện…
+          </div>
+        )}
       </div>
 
-      {/* Input Footer & Suggestions */}
-      <div style={{ flex: 'none', paddingTop: '14px' }}>
-        <div style={{ display: 'flex', gap: '7px', flexWrap: 'wrap', marginBottom: '10px' }}>
-          {suggestions.map((s, idx) => (
+      <div style={{ paddingTop: '12px' }}>
+        <div
+          role="group"
+          aria-label="Câu hỏi gợi ý"
+          style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '10px' }}
+        >
+          {PROMPT_CHIPS.map(({ icon: Icon, label }) => (
             <button
-              key={idx}
-              onClick={() => sendChatMessage(s)}
+              key={label}
+              type="button"
+              onClick={() => ask(label)}
+              disabled={pending}
               style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
                 fontSize: '11.5px',
-                fontWeight: 500,
                 padding: '6px 13px',
                 borderRadius: '20px',
                 border: '1px solid var(--line2)',
                 background: 'var(--card)',
                 color: 'var(--ink2)',
-                cursor: 'pointer',
+                cursor: pending ? 'not-allowed' : 'pointer',
+                opacity: pending ? 0.55 : 1,
                 fontFamily: 'inherit',
               }}
             >
-              {s}
+              <Icon size={12} /> {label}
             </button>
           ))}
         </div>
@@ -356,7 +343,9 @@ export const AIChatbotAssistant: React.FC = () => {
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Hỏi về sự kiện đã ghi nhận… vd: hôm nay có bao nhiêu xe lạ vào?"
+            disabled={pending}
+            aria-label="Câu hỏi gửi tới trợ lý"
+            placeholder="Hỏi về sự kiện đã ghi nhận… vd: hôm nay có bao nhiêu vi phạm?"
             style={{
               flex: 1,
               border: 'none',
@@ -369,7 +358,10 @@ export const AIChatbotAssistant: React.FC = () => {
             }}
           />
           <button
-            onClick={handleSend}
+            type="button"
+            onClick={() => ask(draft)}
+            disabled={pending || !draft.trim()}
+            aria-label="Gửi câu hỏi"
             style={{
               width: '38px',
               height: '38px',
@@ -378,22 +370,23 @@ export const AIChatbotAssistant: React.FC = () => {
               border: 'none',
               background: 'var(--acc)',
               color: '#fff',
-              cursor: 'pointer',
+              cursor: pending || !draft.trim() ? 'not-allowed' : 'pointer',
+              opacity: pending || !draft.trim() ? 0.55 : 1,
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
             }}
           >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2">
-              <path d="m22 2-7 20-4-9-9-4z" />
-            </svg>
+            {pending ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
           </button>
         </div>
 
         <div style={{ fontSize: '10.5px', color: 'var(--ink3)', textAlign: 'center', marginTop: '8px' }}>
-          Trả lời dựa trên chỉ mục sự kiện đã lưu · luôn kèm đoạn video 10s làm bằng chứng
+          Trả lời dựa trên chỉ mục sự kiện đã lưu · sự kiện có clip sẽ kèm đoạn video 10s làm bằng chứng
         </div>
       </div>
+
+      <VideoModal videoUrl={clipUrl} onClose={() => setClipUrl(null)} />
     </div>
   );
 };

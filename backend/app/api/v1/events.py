@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from app.services.frame_extractor import resolve_video_path
 from backend.app.core.config import settings
 from backend.app.services.area_metadata import build_area_metadata_event
-from backend.app.services.event_manager import EventManager
+from backend.app.services.event_manager import CLIP_STATUS_MISSING, EventManager
 from backend.app.services.video_stream import get_camera_pipeline
 from backend.app.services.vision_pipeline import (
     OBJECT_VIETNAMESE_NAMES,
@@ -25,9 +25,12 @@ from backend.database.repository import EventRepository
 
 router = APIRouter()
 vision_pipeline = AIVisionPipeline()
+# Dùng chung một `vision_pipeline` với luồng stream: clip chứng cứ phải mang sẵn
+# bbox (REQ-008 acceptance criteria 2), và nạp YOLO lần thứ hai là phí RAM/VRAM.
 event_manager = EventManager(
     cooldown_seconds=settings.EVENT_COOLDOWN_SECONDS,
     clips_dir=settings.CLIPS_DIR,
+    vision_pipeline=vision_pipeline,
 )
 _FIRST_FRAME_TIMEOUT_SECONDS = 5.0
 
@@ -46,9 +49,16 @@ class EventResponse(BaseModel):
     bbox: Any | None = None
     crop_image_url: str | None = None
     video_clip_url: str | None = None
+    clip_status: str = CLIP_STATUS_MISSING
 
     class Config:
         from_attributes = True
+
+
+class ClipStatusResponse(BaseModel):
+    event_id: str
+    clip_status: str
+    video_clip_url: str | None = None
 
 
 def _event_response_from_model(event: EventModel) -> dict[str, Any]:
@@ -67,6 +77,7 @@ def _event_response_from_model(event: EventModel) -> dict[str, Any]:
         "bbox": event.bbox,
         "crop_image_url": event.crop_image_url,
         "video_clip_url": event.video_clip_url,
+        "clip_status": event_manager.get_clip_status(event.video_clip_url),
     }
 
 
@@ -107,11 +118,15 @@ def _persist_violation_event(
         return None
 
     event_timestamp = timestamp or datetime.now(timezone.utc)
+    # Nền, không đồng bộ: vẽ bbox vào clip 10s tốn ~14s, mà hàm này chạy bên
+    # trong request `/live-detections` mà client poll mỗi 2s. URL trả về ngay và
+    # được ghi thẳng vào CSDL, nên client phải hỏi `clip_status` trước khi tải.
     video_clip_url = event_manager.slice_10s_ring_buffer_clip(
         camera_id,
         timestamp=event_timestamp.timestamp(),
         source_video_path=source_video_path or resolve_video_path(camera_id),
         source_timestamp_seconds=source_timestamp_seconds,
+        background=True,
     )
     event_repo = EventRepository(db)
     event = EventModel(
@@ -166,6 +181,28 @@ def get_events(
     repo = EventRepository(db)
     events = repo.get_recent_events(camera_id=camera_id, severity_level=severity_level, limit=limit)
     return [_event_response_from_model(event) for event in events]
+
+@router.get("/{event_id}/clip-status", response_model=ClipStatusResponse)
+def get_event_clip_status(
+    event_id: str,
+    db: Session = Depends(get_db),  # noqa: B008
+):
+    """
+    Cho biết clip chứng cứ của một sự kiện đã ghi xong chưa.
+
+    Sự kiện có `video_clip_url` ngay lúc phát hiện vi phạm nhưng file chỉ xong sau
+    ~14s. Client poll endpoint này và chỉ mở/tải clip khi `clip_status` là `ready`,
+    thay vì đâm vào 404 hoặc file rỗng.
+    """
+    event = db.query(EventModel).filter(EventModel.id == event_id).first()
+    if event is None:
+        raise HTTPException(status_code=404, detail=f"Không tìm thấy sự kiện {event_id}.")
+    return ClipStatusResponse(
+        event_id=event.id,
+        clip_status=event_manager.get_clip_status(event.video_clip_url),
+        video_clip_url=event.video_clip_url,
+    )
+
 
 @router.get("/video-feed")
 def video_feed(

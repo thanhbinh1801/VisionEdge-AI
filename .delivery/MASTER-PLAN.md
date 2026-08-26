@@ -1,9 +1,9 @@
 ---
 artifact: MASTER-PLAN.md
-version: 2.1.0
+version: 2.4.0
 owner: plan-delivery
 status: approved
-updated_at: "2026-08-24T19:14:07+07:00"
+updated_at: "2026-08-25T15:10:00+07:00"
 depends_on: REQUIREMENTS.md, ARCHITECTURE.md, TECHNICAL-RISKS.md, ADR-001-monolithic-python-fastapi.md, ADR-002-point-in-polygon-zone-evaluation.md, ADR-003-event-cooldown-deduplication.md, ADR-004-llm-text-to-sql-with-fallback.md, ADR-005-Custom-Label-Matching-Architecture.md
 ---
 
@@ -27,11 +27,12 @@ Hệ thống được tổ chức theo 4 Phase chính:
 
 ## 2. Tổng quan Task Inventory
 
-- Tổng số task hiện có trong master plan: `24`
-- Dải task hiện dùng: `TASK-001` đến `TASK-025`, trừ `TASK-011` hiện chưa được cấp phát
+- Tổng số task hiện có trong master plan: `29`
+- Dải task hiện dùng: `TASK-001` đến `TASK-029`, liên tục
 - Nhóm foundation/design: `TASK-001` đến `TASK-005`, `TASK-016`
 - Nhóm feature design: `TASK-020`, `TASK-021`, `TASK-022`
-- Nhóm implementation: `TASK-006` đến `TASK-010`, `TASK-012` đến `TASK-014`, `TASK-017`, `TASK-018`, `TASK-023`, `TASK-024`
+- Nhóm implementation: `TASK-006` đến `TASK-014`, `TASK-017`, `TASK-018`, `TASK-023`, `TASK-024`, `TASK-026`, `TASK-027`, `TASK-029`
+- Nhóm verification: `TASK-015`, `TASK-019`, `TASK-025`, `TASK-028`
 - Nhóm verification/diagnosis: `TASK-015`, `TASK-019`, `TASK-025`
 
 ### Danh sách task hiện hữu
@@ -48,8 +49,9 @@ Hệ thống được tổ chức theo 4 Phase chính:
 | `TASK-008` | `frontend-implementation` | Phát triển shared UI components |
 | `TASK-009` | `frontend-implementation` | Gate Dashboard |
 | `TASK-010` | `frontend-implementation` | Area Security Dashboard baseline |
+| `TASK-011` | `backend-implementation` | LLM Text-to-SQL QA engine |
 | `TASK-012` | `frontend-implementation` | Zone & Tag Settings |
-| `TASK-013` | `frontend-implementation` | AI Chatbot Assistant |
+| `TASK-013` | `frontend-implementation` | AI Chatbot Assistant (UI) |
 | `TASK-014` | `frontend-implementation` | Realtime alerts và multi-channel dispatch |
 | `TASK-015` | `verify-feature` | E2E và nghiệm thu toàn hệ thống baseline |
 | `TASK-016` | `api-design` | Thiết kế contract realtime metadata cho area monitoring |
@@ -62,6 +64,10 @@ Hệ thống được tổ chức theo 4 Phase chính:
 | `TASK-023` | `backend-implementation` | Backend object labeling theo design đã duyệt |
 | `TASK-024` | `frontend-implementation` | Frontend object labeling theo design đã duyệt |
 | `TASK-025` | `verify-feature` | Verification end-to-end cho CR-004 |
+| `TASK-026` | `backend-implementation` | BBox bám frame trong clip chứng cứ 10s |
+| `TASK-027` | `frontend-implementation` | Dọn mã chết chatbot và nút tải clip |
+| `TASK-028` | `feature-verification` | Nghiệm thu REQ-008 acceptance criteria 2 |
+| `TASK-029` | `backend-implementation` | Nối dây events.py với vision_pipeline và trạng thái clip pending |
 
 ---
 
@@ -220,7 +226,7 @@ Hệ thống được tổ chức theo 4 Phase chính:
 - Gate: all-complete
 - Integration commands: python -m pytest backend/tests/test_integration.py && npm --prefix frontend run build
 
-### Wave 1 (Gate Dashboard & Area Dashboard)
+### Wave 1 (Gate Dashboard, Area Dashboard & LLM QA Engine)
 
 #### TASK-009 Triển khai Tab 1 — Gate Dashboard (LPR Cổng)
 - Task type: implementation
@@ -254,6 +260,22 @@ Hệ thống được tổ chức theo 4 Phase chính:
 - Wave: 1
 - Status: ready
 
+#### TASK-011 Triển khai LLM Text-to-SQL QA Engine (Backend)
+- Task type: implementation
+- Scope: feature
+- Module: llm-qa-agent
+- Linked requirements: REQ-008, CR-002
+- Capability: backend-implementation
+- Dependencies: TASK-006
+- Inputs: docs/contracts/API-FOUNDATION.md, .delivery/adr/ADR-004-llm-text-to-sql-with-fallback.md, docs/contracts/db/schema.sql
+- Outputs: backend/app/services/qa_agent.py, backend/app/api/v1/assistant.py, backend/tests/test_chatbot.py
+- Completion gate: Engine dịch câu hỏi tiếng Việt sang truy vấn SQL chỉ đọc trên bảng `events`, trả về câu trả lời kèm `event_id` để tầng trên lấy clip 10s chứng cứ, và rơi về câu trả lời fallback khi không dịch được truy vấn theo ADR-004. Thay thế câu trả lời canned hiện có trong `LLMQAAgent` bằng truy vấn dữ liệu thật.
+- Verification method: python -m pytest backend/tests/test_chatbot.py
+- Parallelizable: yes
+- Write scope: backend/app/services/qa_agent.py, backend/app/api/v1/assistant.py, backend/tests/test_chatbot.py
+- Wave: 1
+- Status: ready
+
 ### Wave 2 (Zone Settings & AI Chatbot)
 
 #### TASK-012 Triển khai Tab 3 — Zone & Tag Settings (SVG Canvas & BBox Tool)
@@ -272,19 +294,19 @@ Hệ thống được tổ chức theo 4 Phase chính:
 - Wave: 2
 - Status: ready
 
-#### TASK-013 Triển khai Tab 4 — AI Chatbot Assistant
+#### TASK-013 Triển khai Tab 4 — AI Chatbot Assistant (Frontend)
 - Task type: implementation
 - Scope: feature
 - Module: llm-qa-agent
 - Linked requirements: REQ-008, CR-002
 - Capability: frontend-implementation
-- Dependencies: TASK-006, TASK-008
+- Dependencies: TASK-008, TASK-011
 - Inputs: docs/contracts/API-FOUNDATION.md
-- Outputs: frontend/src/pages/AIChatbotAssistant.tsx, backend/ai/text_to_sql.py
-- Completion gate: Trang Chatbot tiếng Việt với thanh gợi ý Prompt Chips, trả lời Text-to-SQL đính kèm trình phát `<VideoModal>` clip 10s chứng cứ.
-- Verification method: python -m pytest backend/tests/test_chatbot.py
+- Outputs: frontend/src/pages/AIChatbotAssistant.tsx
+- Completion gate: Trang Chatbot tiếng Việt với thanh gợi ý Prompt Chips, hiển thị câu trả lời từ engine Text-to-SQL của TASK-011 và đính kèm trình phát `<VideoModal>` clip 10s chứng cứ.
+- Verification method: npm --prefix frontend run lint && npm --prefix frontend run build
 - Parallelizable: yes
-- Write scope: frontend/src/pages/AIChatbotAssistant.tsx, backend/ai/text_to_sql.py
+- Write scope: frontend/src/pages/AIChatbotAssistant.tsx
 - Wave: 2
 - Status: ready
 
@@ -312,7 +334,7 @@ Hệ thống được tổ chức theo 4 Phase chính:
 - Module: none
 - Linked requirements: REQ-001, REQ-002, REQ-003, REQ-004, REQ-005, REQ-006, REQ-007, REQ-008, REQ-009, CR-001, CR-002
 - Capability: verify-feature
-- Dependencies: TASK-009, TASK-010, TASK-012, TASK-013, TASK-014
+- Dependencies: TASK-009, TASK-010, TASK-011, TASK-012, TASK-013, TASK-014
 - Inputs: .delivery/REQUIREMENTS.md, .delivery/ARCHITECTURE.md
 - Outputs: docs/reports/e2e-verification-report.md
 - Completion gate: Nghiệm thu toàn bộ 4 tab chính, nhận diện mượt mà với 8 loại đối tượng và nhãn Xe quen/Xe lạ, trích xuất đúng 10s MP4 clip và phát còi bíp Mức 3.
@@ -510,6 +532,101 @@ Hệ thống được tổ chức theo 4 Phase chính:
 
 ---
 
+## Phase 5 — Hoàn thiện Chứng cứ Clip cho REQ-008
+
+- Gate: integration-check
+- Integration commands: python -m pytest backend/tests/test_event_clip_bbox.py backend/tests/test_event_clip_wiring.py backend/tests/test_live_detections_event.py -q && npm --prefix frontend run lint && npm --prefix frontend run build
+
+Acceptance criteria 2 của `REQ-008` yêu cầu clip 10s "có bbox highlight đối tượng". Việc cắt clip
+10s thật đã hoàn thành từ trước (`EventManager._write_mp4_clip` ghi MP4 bằng `cv2.VideoWriter`),
+nhưng chưa nơi nào vẽ bbox: không có burn-in ở `event_manager.py` và không có overlay ở
+`VideoModal.tsx`. Phase này đóng đúng lỗ hổng đó, cộng phần dọn dẹp mã chết còn lại của luồng
+chatbot sau `TASK-011`/`TASK-013`.
+
+Chủ dự án đã chốt hướng burn-in ở backend kèm bám theo từng frame, nên `VideoModal` không cần
+overlay và clip tải về mang sẵn bbox.
+
+### Wave 1 (Backend burn-in bbox vào clip)
+
+#### TASK-026 Vẽ BBox Bám Theo Frame vào Clip Chứng cứ 10s
+- Task type: implementation
+- Scope: feature
+- Module: event-clip-manager
+- Linked requirements: REQ-008, CR-002
+- Capability: backend-implementation
+- Dependencies: TASK-007
+- Inputs: .delivery/REQUIREMENTS.md (REQ-008 acceptance criteria 2), backend/app/services/event_manager.py, backend/app/services/vision_pipeline.py
+- Outputs: backend/app/services/event_manager.py, backend/tests/test_event_clip_bbox.py
+- Completion gate: Clip 10s ghi ra có khung bbox bám theo đối tượng qua từng frame và nhãn lớp tiếng Việt; clip tải về mang sẵn bbox mà không cần frontend vẽ thêm. Báo cáo thời gian sinh một clip trước và sau thay đổi để định lượng chi phí suy luận theo frame; nếu vượt ngưỡng chấp nhận được của đường ghi sự kiện thì dừng và nêu phương án (giảm tần suất suy luận hoặc sinh clip bất đồng bộ) thay vì âm thầm làm chậm hot path.
+- Verification method: python -m pytest backend/tests/test_event_clip_bbox.py -q
+- Parallelizable: no
+- Write scope: backend/app/services/event_manager.py, backend/tests/test_event_clip_bbox.py
+- Wave: 1
+- Status: completed
+
+### Wave 2 (Nối dây backend cho clip có bbox)
+
+<!-- TASK-029 sinh ra từ scope change request của TASK-026: EventManager đã biết vẽ bbox
+     nhưng events.py vẫn khởi tạo với vision_pipeline=None, nên clip sản phẩm không có
+     bbox và TASK-028 chắc chắn trượt. TASK-027 (frontend) phụ thuộc trạng thái clip do
+     task này định nghĩa, nên bị đẩy sang Wave 3 và TASK-028 sang Wave 4. -->
+
+#### TASK-029 Nối dây events.py với vision_pipeline và Trạng thái Clip Pending
+- Task type: implementation
+- Scope: feature
+- Module: event-clip-manager
+- Linked requirements: REQ-008, CR-002
+- Capability: backend-implementation
+- Dependencies: TASK-026
+- Inputs: .delivery/tasks/TASK-026/TASK-RESULT.md, .delivery/REQUIREMENTS.md (REQ-008 acceptance criteria 2), backend/app/api/v1/events.py, backend/app/services/event_manager.py
+- Outputs: backend/app/api/v1/events.py, backend/app/services/event_manager.py, backend/tests/test_event_clip_wiring.py, .delivery/tasks/TASK-029/TASK-RESULT.md
+- Completion gate: `EventManager` module-level trong `events.py` nhận `vision_pipeline` và `_persist_violation_event` gọi `slice_10s_ring_buffer_clip(..., background=True)`, chứng minh bằng đo đạc rằng phần ghi sự kiện của `/live-detections` giữ dưới 0.05s. API cho client biết clip đang render qua `clip_status` (`ready` / `processing` / `missing`) để không tải sớm gặp file rỗng. Không thêm dependency mới và không sửa `frontend/src/`.
+- Verification method: python -m pytest backend/tests/test_event_clip_wiring.py backend/tests/test_event_clip_bbox.py backend/tests/test_live_detections_event.py -q
+- Parallelizable: no
+- Write scope: backend/app/api/v1/events.py, backend/app/services/event_manager.py, backend/tests/test_event_clip_wiring.py, backend/tests/test_live_detections_event.py, .delivery/tasks/TASK-029/
+- Wave: 2
+- Status: completed
+
+### Wave 3 (Dọn dẹp frontend luồng chatbot)
+
+<!-- conflict-split: TASK-027 ghi frontend/src/pages/AIChatbotAssistant.tsx, trùng write scope với TASK-013 ở Phase 3 Wave 2; tách sang wave riêng để nối tiếp thay vì chạy song song. -->
+
+#### TASK-027 Dọn Mã Chết Luồng Chatbot và Bổ sung Nút Tải Clip
+- Task type: implementation
+- Scope: feature
+- Module: web-ui
+- Linked requirements: REQ-008, CR-002
+- Capability: frontend-implementation
+- Dependencies: TASK-013, TASK-026, TASK-029
+- Inputs: .delivery/tasks/TASK-013/TASK-RESULT.md, frontend/src/context/AppContext.tsx, frontend/src/components/common/VideoModal.tsx, frontend/src/services/api.ts
+- Outputs: frontend/src/context/AppContext.tsx, frontend/src/components/common/VideoModal.tsx, frontend/src/services/api.ts, frontend/src/pages/AIChatbotAssistant.tsx
+- Completion gate: Gỡ `sendChatMessage` và bảng cứng `qaKnowledgeBase` khỏi `AppContext` để chỉ còn một nguồn trả lời duy nhất; chuyển lời gọi `POST /api/v1/assistant/query` từ trang vào `services/api.ts` theo quy ước chung; thêm nút tải clip vào `VideoModal` và bỏ nút tải tạm đặt trong bong bóng tin nhắn. Không thêm overlay bbox vì bbox đã burn-in ở TASK-026.
+- Verification method: npm --prefix frontend run lint && npm --prefix frontend run build
+- Parallelizable: no
+- Write scope: frontend/src/context/AppContext.tsx, frontend/src/components/common/VideoModal.tsx, frontend/src/services/api.ts, frontend/src/pages/AIChatbotAssistant.tsx
+- Wave: 3
+- Status: planned
+
+### Wave 4 (Nghiệm thu chứng cứ REQ-008)
+
+#### TASK-028 Nghiệm thu Acceptance Criteria 2 của REQ-008
+- Task type: verification
+- Scope: feature
+- Module: llm-qa-agent
+- Linked requirements: REQ-008, CR-002
+- Capability: feature-verification
+- Dependencies: TASK-026, TASK-027, TASK-029
+- Inputs: .delivery/REQUIREMENTS.md (REQ-008), .delivery/tasks/TASK-026/TASK-RESULT.md, .delivery/tasks/TASK-027/TASK-RESULT.md, .delivery/tasks/TASK-029/TASK-RESULT.md
+- Outputs: .delivery/tasks/TASK-028/
+- Completion gate: Xác minh đủ chuỗi chứng cứ của REQ-008 acceptance criteria 2 — hỏi trợ lý một sự kiện vi phạm, nhận `event_id` và `clip_url`, mở `VideoModal` thấy clip 10s có bbox bám đối tượng, bấm nút tải và mở file tải về thấy bbox vẫn còn. Ghi lại lỗ hổng nếu `TASK-015` vẫn bỏ sót tiêu chí bbox trong completion gate của nó.
+- Verification method: python -m pytest backend/tests/test_event_clip_bbox.py -q && npm --prefix frontend run build
+- Parallelizable: no
+- Write scope: .delivery/tasks/TASK-028/
+- Wave: 4
+- Status: planned
+
+---
+
 ## 4. Bản đồ Bao phủ Yêu cầu (Coverage Map)
 
 ## Coverage Map
@@ -521,9 +638,9 @@ Hệ thống được tổ chức theo 4 Phase chính:
 - REQ-005 -> TASK-002, TASK-004, TASK-005, TASK-012, TASK-015, TASK-016, TASK-017, TASK-018, TASK-019, TASK-020, TASK-021, TASK-022, TASK-023, TASK-024, TASK-025
 - REQ-006 -> TASK-003, TASK-006, TASK-012, TASK-015
 - REQ-007 -> TASK-007, TASK-012, TASK-015, TASK-020, TASK-021, TASK-022, TASK-023, TASK-024, TASK-025
-- REQ-008 -> TASK-002, TASK-013, TASK-015
+- REQ-008 -> TASK-002, TASK-011, TASK-013, TASK-015, TASK-026, TASK-027, TASK-028, TASK-029
 - REQ-009 -> TASK-002, TASK-008, TASK-014, TASK-015, TASK-016, TASK-017, TASK-018, TASK-019
 - CR-001 -> TASK-002, TASK-005, TASK-006, TASK-007, TASK-010, TASK-012, TASK-015
-- CR-002 -> TASK-001, TASK-002, TASK-003, TASK-004, TASK-005, TASK-006, TASK-007, TASK-008, TASK-009, TASK-010, TASK-012, TASK-013, TASK-014, TASK-015
+- CR-002 -> TASK-001, TASK-002, TASK-003, TASK-004, TASK-005, TASK-006, TASK-007, TASK-008, TASK-009, TASK-010, TASK-011, TASK-012, TASK-013, TASK-014, TASK-015, TASK-026, TASK-027, TASK-028, TASK-029
 - CR-003 -> TASK-016, TASK-017, TASK-018, TASK-019
 - CR-004 -> TASK-020, TASK-021, TASK-022, TASK-023, TASK-024, TASK-025

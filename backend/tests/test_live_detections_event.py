@@ -122,6 +122,9 @@ def test_persist_violation_event_writes_10s_clip_for_chatbot(db_session, monkeyp
     assert event.severity_level == 3
     assert event.video_clip_url == f"/media/clips/{clip_name}"
     assert event.bbox == [10.0, 20.0, 30.0, 40.0]
+    # Clip được ghi ở thread nền từ TASK-029, nên file chưa chắc tồn tại ngay sau
+    # khi hàm trả về; phải chờ thread ghi xong rồi mới kiểm tra nội dung.
+    assert events.event_manager.wait_for_pending_clips(timeout=60.0)
     assert (clips_dir / clip_name).exists()
     _assert_playable_mp4(clips_dir / clip_name, expected_seconds=10.0)
 
@@ -183,6 +186,7 @@ def test_area_metadata_violation_persistence_writes_chatbot_clip(db_session, mon
     assert persisted[0].object_class == "Xe nâng"
     assert persisted[0].bbox == [10.0, 20.0, 30.0, 40.0]
     assert persisted[0].video_clip_url.startswith("/media/clips/clip_WS-CAM_")
+    assert events.event_manager.wait_for_pending_clips(timeout=60.0)
     clip_path = clips_dir / persisted[0].video_clip_url.rsplit("/", 1)[-1]
     _assert_playable_mp4(clip_path, expected_seconds=10.0)
 
