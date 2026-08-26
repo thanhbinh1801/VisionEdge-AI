@@ -325,11 +325,11 @@ export const ZoneTagSettings: React.FC = () => {
     setAnnPick(null);
   };
 
-  const currentAnnSource = annSources.find((s) => s.id === annSrc) || annSources[0];
-  const annCameraId = currentAnnSource.name.toLowerCase().includes('gate') ? 'GATE-01' : 'BAI-KIEM';
+  const currentAnnSource = annSources.find((s) => s.id === annSrc) || annSources[0] || null;
+  const annCameraId = currentAnnSource?.name?.toLowerCase().includes('gate') ? 'GATE-01' : 'BAI-KIEM';
 
   useEffect(() => {
-    if (currentAnnSource.kind !== 'video') {
+    if (!currentAnnSource || currentAnnSource.kind !== 'video') {
       setAnnFrameSrc('');
       setAnnFrameMeta(null);
       setAnnFrameError('');
@@ -355,17 +355,17 @@ export const ZoneTagSettings: React.FC = () => {
       active = false;
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [annCameraId, currentAnnSource.kind, vidFrame, annFrameRetry]);
+  }, [annCameraId, currentAnnSource?.kind, vidFrame, annFrameRetry]);
 
   useEffect(() => {
     setAnnFrameDraft(vidFrame);
   }, [vidFrame]);
 
-  const frameKey = currentAnnSource.id + (currentAnnSource.kind === 'video' ? ':' + vidFrame : '');
+  const frameKey = currentAnnSource ? currentAnnSource.id + (currentAnnSource.kind === 'video' ? ':' + vidFrame : '') : '';
   const activeAnnBoxes = annSamples.filter(
     (s) =>
       (s.srcId || 'src1') + (s.frame !== undefined && s.frame !== null ? ':' + s.frame : '') === frameKey ||
-      ((s.srcId || 'src1') === currentAnnSource.id && currentAnnSource.kind !== 'video' && s.frame === null)
+      (currentAnnSource && (s.srcId || 'src1') === currentAnnSource.id && currentAnnSource.kind !== 'video' && s.frame === null)
   );
 
   const pendingCount = annSamples.filter((s) => s.session).length;
@@ -1643,7 +1643,7 @@ export const ZoneTagSettings: React.FC = () => {
                 >
                   + Import video mới
                 </button>
-                {currentAnnSource.kind === 'video' && (
+                {currentAnnSource?.kind === 'video' && (
                   <button
                     onClick={() => {
                       const nextFrame = Math.min(
