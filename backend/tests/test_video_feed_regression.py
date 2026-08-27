@@ -44,6 +44,7 @@ def _snapshot(frame_id=11, captured_at="2026-08-21T09:00:00+00:00"):
 
 
 def _install_cv2(monkeypatch, *, encode_ok=True):
+    rectangle_calls = []
     dummy_cv2 = SimpleNamespace(
         IMWRITE_JPEG_QUALITY=1,
         FONT_HERSHEY_SIMPLEX=0,
@@ -51,12 +52,13 @@ def _install_cv2(monkeypatch, *, encode_ok=True):
             encode_ok,
             SimpleNamespace(tobytes=lambda: b"jpeg-first-frame"),
         ),
-        rectangle=lambda *args, **kwargs: None,
+        rectangle=lambda *args, **kwargs: rectangle_calls.append(args),
         getTextSize=lambda *args, **kwargs: ((32, 10), 0),
         putText=lambda *args, **kwargs: None,
         polylines=lambda *args, **kwargs: None,
     )
     monkeypatch.setattr(events, "cv2", dummy_cv2)
+    return rectangle_calls
 
 
 def test_video_feed_emits_first_mjpeg_chunk_without_waiting_forever(monkeypatch):
@@ -104,3 +106,31 @@ def test_video_feed_returns_explicit_error_when_first_snapshot_cannot_encode(mon
 
     assert excinfo.value.status_code == 503
     assert "mã hóa được frame đầu tiên" in excinfo.value.detail
+
+
+def test_video_feed_hides_static_container_boxes_until_debug_enabled(monkeypatch):
+    snapshot = _snapshot()
+    snapshot.detections = (
+        {
+            "object_class": "container",
+            "vietnamese_name": "Container",
+            "confidence": 0.9,
+            "bbox": [10, 10, 20, 20],
+            "zone_violation": False,
+        },
+    )
+    monkeypatch.setattr(events.zone_cache_service, "get_or_load", lambda db, camera_id: _zone_state())
+
+    hidden_pipeline = StubPipeline([snapshot])
+    monkeypatch.setattr(events, "get_camera_pipeline", lambda *args, **kwargs: hidden_pipeline)
+    hidden_rectangles = _install_cv2(monkeypatch)
+    response = events.video_feed(db=object())
+    asyncio.run(response.body_iterator.__anext__())
+    assert hidden_rectangles == []
+
+    shown_pipeline = StubPipeline([snapshot])
+    monkeypatch.setattr(events, "get_camera_pipeline", lambda *args, **kwargs: shown_pipeline)
+    shown_rectangles = _install_cv2(monkeypatch)
+    response = events.video_feed(db=object(), show_static_containers=True)
+    asyncio.run(response.body_iterator.__anext__())
+    assert len(shown_rectangles) >= 2

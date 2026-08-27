@@ -1,9 +1,9 @@
 ---
 artifact: DOMAIN-MODEL.md
-version: 1.1.0
+version: 1.2.0
 owner: collect-requirements
 status: in-review
-updated_at: "2026-08-24T22:06:32+07:00"
+updated_at: "2026-08-27T19:49:34+07:00"
 ---
 
 # Mô hình Miền Nghiệp vụ SentriAI Mini
@@ -12,7 +12,13 @@ updated_at: "2026-08-24T22:06:32+07:00"
 
 - **Camera**: Nguồn phát video stream (`GATE-01`, `BAI-KIEM`).
 - **Zone (Vùng giám sát)**: Đa giác polygon vẽ trên React SVG Canvas định nghĩa các vùng cấm hoặc khu vực theo dõi.
-- **Đối tượng vi phạm**: Thực thể phát hiện bởi YOLOv26 có tâm nằm trong zone cấm.
+- **Đối tượng vi phạm**: Thực thể phát hiện bởi YOLOv11s finetune trong luồng Area Monitoring, thuộc danh sách cấm của zone và được xác nhận nằm trong zone bằng rule hình học phù hợp nhóm đối tượng.
+- **BBox hiển thị**: Ô bao được vẽ trên stream để người vận hành quan sát detection; có thể dùng ngưỡng confidence thấp hơn ngưỡng sinh event/cảnh báo.
+- **Event/cảnh báo hợp lệ**: Vi phạm đã qua ngưỡng/rule nghiệp vụ, kiểm tra ổn định ngắn và dedup/cooldown trước khi tạo event Mức 3 hoặc kích hoạt alert.
+- **Bottom-center**: Điểm giữa cạnh dưới bbox, dùng làm đại diện vị trí chạm đất cho người, xe máy và xe đạp.
+- **Footprint overlap**: Vùng đáy bbox xấp xỉ diện tích tiếp xúc mặt đất của phương tiện, dùng để đánh giá xe nâng, xe tải/container-truck, xe con và xe cẩu có nằm trong zone hay không.
+- **Overlap ratio**: Tỉ lệ giao nhau giữa bbox/footprint và zone polygon; dùng cho container/shipping_container hoặc đối tượng lớn để tránh sai lệch do chỉ xét một điểm.
+- **Track ID optional**: Định danh đối tượng theo tracker khi runtime có cung cấp; trong CR-007 đây là trường chuẩn bị tương thích tương lai, không bắt buộc triển khai tracking.
 - **Biển số xe (LPR)**: Chuỗi ký tự biển số nhận diện từ làn cổng.
 - **Sự kiện (Event)**: Bản ghi lưu lại vi phạm hoặc xe qua cổng kèm ảnh crop và clip 10s MP4.
 - **Thời gian vi phạm đúng**: Mốc thời gian của frame đầu tiên được xác nhận là vi phạm sau khi qua luật zone và dedup/cooldown; đây là thời gian nghiệp vụ hiển thị trong Telegram và dùng để truy xuất sự kiện.
@@ -41,3 +47,12 @@ updated_at: "2026-08-24T22:06:32+07:00"
 - Thông báo Telegram chứng cứ phải có cùng thời gian vi phạm đúng, camera, zone, loại đối tượng, lý do vi phạm và clip 10s với event nguồn.
 - Metadata lane có thể phản ánh đối tượng đang vi phạm, nhưng metadata snapshot không tự tạo nghĩa "thông báo Telegram chứng cứ" nếu chưa có event Mức 3 hợp lệ từ event/alert lane.
 - Gửi Telegram thất bại không làm mất event hoặc clip chứng cứ và không chặn cảnh báo UI; lỗi gửi Telegram là trạng thái vận hành cần được ghi nhận để kiểm tra sau.
+
+## 4. Quan hệ và Bất biến CR-007
+
+- Bbox hiển thị và event/cảnh báo không cùng một nghĩa nghiệp vụ: bbox có thể xuất hiện sớm hơn hoặc ở confidence thấp hơn để hỗ trợ quan sát, nhưng không tự tạo event Mức 3.
+- Event/cảnh báo Mức 3 của Area Monitoring chỉ phát sinh sau khi đối tượng thuộc danh sách cấm vi phạm zone ổn định trong một khoảng ngắn, ví dụ khoảng 3 frame hoặc 0.5 giây.
+- Người, xe nâng và xe tải/container-truck là nhóm ưu tiên không bỏ sót trong Area Monitoring; cấu hình threshold phải phản ánh ưu tiên này.
+- Container/shipping_container mặc định có thể ẩn bbox trên stream để giảm che khuất màn hình, nhưng hệ thống phải có chế độ debug để bật hiển thị khi cần kiểm tra model.
+- Rule zone evaluation phải được chọn theo nhóm đối tượng: bottom-center cho người/xe máy/xe đạp; footprint overlap cho xe nâng/xe tải/container-truck/xe con/xe cẩu; overlap ratio riêng cho container/shipping_container.
+- `track_id` là optional trong CR-007; consumer phải hoạt động khi không có `track_id`, và việc triển khai ByteTrack/BoT-SORT đầy đủ thuộc phạm vi sau.

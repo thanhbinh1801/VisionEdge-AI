@@ -35,6 +35,11 @@ class EventManager:
         self._cooldown_cache[key] = now
         return False
 
+    def evidence_clip_url(self, camera_id: str, timestamp: float | None = None) -> str:
+        """Return the stable public URL for an event evidence clip."""
+        ts = int(timestamp or time.time())
+        return f"/media/clips/clip_{camera_id}_{ts}.mp4"
+
     def slice_10s_ring_buffer_clip(
         self,
         camera_id: str,
@@ -43,6 +48,7 @@ class EventManager:
         source_video_path: str | None = None,
         source_timestamp_seconds: float | None = None,
         duration_seconds: float = 10.0,
+        overwrite_existing: bool = False,
     ) -> str:
         """
         Extracts 10s MP4 evidence video clip around event timestamp and returns relative URL.
@@ -52,19 +58,26 @@ class EventManager:
         or end of the source, the clip is shorter only when the source itself
         cannot provide duration_seconds of frames.
         """
-        ts = int(timestamp or time.time())
-        filename = f"clip_{camera_id}_{ts}.mp4"
+        clip_url = self.evidence_clip_url(camera_id, timestamp)
+        filename = clip_url.rsplit("/", 1)[-1]
         filepath = os.path.join(self.clips_dir, filename)
         
-        if not os.path.exists(filepath):
+        if overwrite_existing or not os.path.exists(filepath):
             if not source_video_path:
                 from backend.app.services.frame_extractor import resolve_video_path
 
                 source_video_path = resolve_video_path(camera_id)
+            event_timestamp_seconds = source_timestamp_seconds
+            if event_timestamp_seconds is None:
+                logger.warning(
+                    "Missing source timestamp for evidence clip %s; falling back to source start.",
+                    filename,
+                )
+                event_timestamp_seconds = 0.0
             self._write_mp4_clip(
                 source_video_path=source_video_path,
                 destination_path=filepath,
-                event_timestamp_seconds=source_timestamp_seconds or 0.0,
+                event_timestamp_seconds=event_timestamp_seconds,
                 duration_seconds=duration_seconds,
             )
                 
@@ -131,7 +144,9 @@ class EventManager:
         if os.path.exists(destination_path):
             try:
                 import subprocess
+
                 import imageio_ffmpeg
+
                 ffmpeg_bin = imageio_ffmpeg.get_ffmpeg_exe()
                 h264_tmp_path = destination_path + ".h264.mp4"
                 cmd = [
@@ -143,10 +158,10 @@ class EventManager:
                     "-movflags", "+faststart",
                     h264_tmp_path,
                 ]
-                res = subprocess.run(cmd, capture_output=True, timeout=15)
+                res = subprocess.run(cmd, capture_output=True, timeout=15, check=False)
                 if res.returncode == 0 and os.path.exists(h264_tmp_path) and os.path.getsize(h264_tmp_path) > 0:
                     os.replace(h264_tmp_path, destination_path)
                 elif os.path.exists(h264_tmp_path):
                     os.remove(h264_tmp_path)
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - transcoding is best-effort compatibility work
                 logger.warning(f"FFmpeg H.264 transcoding skipped for {destination_path}: {exc}")

@@ -98,21 +98,13 @@ class Settings(BaseSettings):
     VIDEO_GATE_01_PATH: str = ""
     VIDEO_XUONG_AN_NINH_PATH: str = ""
 
-    # Ngưỡng tin cậy tối thiểu để giữ lại một detection của YOLO.
-    # Sau khi thay prompt trần bằng cụm mô tả (xem CANONICAL_CLASS_PROMPTS), điểm số
-    # tăng rõ: xe đầu kéo ở cổng lên 0.89, container trong bãi 0.57-0.59. Nhờ vậy nâng
-    # được ngưỡng từ 0.25 lên 0.30 để cắt lớp false positive quanh 0.26-0.29 (cột đèn
-    # bị nhận thành người, bồn chứa thành xe tải) mà không mất detection thật.
-    # Đừng đặt cao hơn ~0.35: đo trên footage thật, 0.35 làm bãi Bãi Kiểm rụng từ
-    # 4 detection xuống còn 1.
+    # Ngưỡng tin cậy tối thiểu để giữ lại một detection của YOLOv11s finetune.
     DETECTION_CONFIDENCE_THRESHOLD: float = 0.30
 
     # Tên file weights (nằm trong backend/app/ai/weights/) hoặc đường dẫn tuyệt đối
     # tới file .pt dùng cho Area Zone Monitoring.
-    #   - "sentri-yolo11s.pt": YOLOv11s finetune 50 epoch trên dataset cảng, 9 lớp
-    #     riêng (shipping_container, container_truck, ...). Mặc định.
-    #   - "yolov8s-worldv2.pt": quay lại YOLO-World open-vocabulary; tên file có chữ
-    #     "world" là điều kiện để pipeline nạp nhánh YOLOWorld + set_classes().
+    # Mặc định dùng YOLOv11s finetune trên dataset cảng; runtime không còn nạp
+    # open-vocabulary hoặc fallback sang model COCO.
     DETECTION_MODEL_WEIGHTS: str = "sentri-yolo11s.pt"
 
     EVENT_COOLDOWN_SECONDS: int = 15

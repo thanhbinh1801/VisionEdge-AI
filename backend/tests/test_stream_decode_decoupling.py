@@ -119,6 +119,18 @@ def test_snapshot_reports_detection_age(pipeline):
     assert snapshot.detection_age_ms < SLOW_INFERENCE_SECONDS * 1000.0 * 3
 
 
+def test_snapshot_reports_detection_source_timestamp(pipeline):
+    """Clip chứng cứ phải neo vào frame đã suy luận, không phải mặc định giây 0."""
+    pipeline, _ = pipeline
+    snapshot = pipeline.wait_for_detection_update(None, timeout=15.0)
+
+    assert snapshot is not None
+    assert snapshot.detection_seq > 0
+    assert snapshot.detection_source_timestamp_seconds > 0.0
+    expected = snapshot.detection_frame_id / 25.0
+    assert snapshot.detection_source_timestamp_seconds == pytest.approx(expected, abs=0.08)
+
+
 def test_detection_lane_wakes_once_per_inference(pipeline):
     """Metadata lane bám nhịp suy luận, không bám nhịp decode."""
     pipeline, stub = pipeline

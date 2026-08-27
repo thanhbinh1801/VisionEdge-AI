@@ -1,9 +1,9 @@
 ---
 artifact: REQUIREMENTS.md
-version: 1.6.0
+version: 1.7.0
 owner: collect-requirements
 status: approved
-updated_at: "2026-08-24T22:06:32+07:00"
+updated_at: "2026-08-27T19:49:34+07:00"
 ---
 
 Discovery status: confirmed
@@ -69,6 +69,16 @@ Hệ thống cung cấp giải pháp giám sát an ninh camera AI tự động c
 
 ---
 
+## CR-007 Area Monitoring Detection & Bounding Box Reliability
+
+- Business delta: Luồng Giám sát Khu vực bằng YOLOv11s finetune phải tách nghĩa ngưỡng hiển thị bbox khỏi ngưỡng sinh event/cảnh báo, ưu tiên không bỏ sót người/xe nâng/xe tải hoặc container-truck, cho phép debug bbox container/shipping_container dù mặc định ẩn để tránh rối màn hình, và đánh giá vi phạm zone theo hình học phù hợp từng nhóm đối tượng thay vì chỉ dựa vào tâm bbox.
+- Affected requirement IDs: `REQ-002`, `REQ-004`, `REQ-009`
+- Previous meaning: Area Monitoring dùng mô hình YOLOv26 và xác định đối tượng trong zone theo vị trí tâm bbox; bbox hiển thị và event/cảnh báo chưa được tách ngưỡng nghiệp vụ; container có thể bị ẩn cứng khỏi stream; tracking/track_id chưa có nghĩa chuẩn bị trong contract.
+- Source: Product Owner xác nhận tóm tắt discovery CR-007 ngày 2026-08-27 sau khi kiểm tra code `vision_pipeline.py`, `events.py`, `video_stream.py`, `area_metadata.py` và `.delivery/changes/CR-007/CHANGE-IMPACT.md`.
+- Status: active
+
+---
+
 ## 3. Danh sách Yêu cầu Sản phẩm (Product Requirements)
 
 ## REQ-001 Nhận diện biển số xe tại Cổng (LPR Gate Monitoring)
@@ -83,11 +93,11 @@ Hệ thống cung cấp giải pháp giám sát an ninh camera AI tự động c
 
 ## REQ-002 Giám sát Khu vực & Kiểm tra Quy tắc Zone (Area Zone Violations)
 
-- Behavior: Hệ thống đọc stream camera khu vực (`BAI-KIEM`), phát hiện và phân loại đối tượng (người, xe container, xe tải, xe nâng, xe cẩu, xe con, xe máy, xe đạp) bằng mô hình **YOLOv26** theo vị trí tâm (bounding box center) trong các Zone đa giác. Luồng runtime phải tách riêng `video stream lane` và `realtime metadata lane`: video renderer tiếp tục phục vụ hiển thị khung hình, còn metadata lane phát snapshot theo frame gồm đối tượng, zone hit, trạng thái stream và latency để UI cập nhật overlay/KPI mà không phụ thuộc vào polling event history. So sánh với quy tắc cấm/cho phép của từng Zone để sinh cảnh báo vi phạm khi có đối tượng thuộc danh sách cấm đi vào zone, kèm loại đối tượng và lý do vi phạm đủ rõ để dùng lại trong Event Feed, AI Assistant và Telegram evidence notification. Giao diện React hiển thị các thẻ KPI giám sát khu vực sử dụng Recharts (Đối tượng trong khu, Vi phạm loại xe, Xe nâng/container hoạt động, Tổng số zone).
+- Behavior: Hệ thống đọc stream camera khu vực (`BAI-KIEM`), phát hiện và phân loại đối tượng (người, container, shipping_container, xe tải, container-truck, xe nâng, xe cẩu, xe con, xe máy, xe đạp hoặc lớp tương đương trong model finetune) bằng mô hình **YOLOv11s finetune** dành riêng cho Area Monitoring. Bbox hiển thị trên stream được phép dùng ngưỡng thấp hơn ngưỡng sinh event/cảnh báo để người vận hành quan sát đối tượng nghi ngờ; event/cảnh báo chỉ được sinh khi detection vượt qua ngưỡng/rule ổn định hơn. Hệ thống phải ưu tiên giảm bỏ sót cho nhóm người, xe nâng, xe tải/container-truck. Luồng runtime phải tách riêng `video stream lane` và `realtime metadata lane`: video renderer tiếp tục phục vụ hiển thị khung hình, còn metadata lane phát snapshot theo frame gồm đối tượng, zone hit, trạng thái stream và latency để UI cập nhật overlay/KPI mà không phụ thuộc vào polling event history. So sánh với quy tắc cấm/cho phép của từng Zone để sinh cảnh báo vi phạm khi có đối tượng thuộc danh sách cấm đi vào zone, trong đó đánh giá zone không còn chỉ dựa vào tâm bbox mà dùng rule hình học theo nhóm đối tượng: người/xe máy/xe đạp dùng bottom-center; xe nâng/xe tải/container-truck/xe con/xe cẩu dùng footprint overlap; container/shipping_container dùng overlap ratio riêng. Bbox container/shipping_container mặc định được ẩn trên stream để không che màn hình, nhưng phải có chế độ debug để bật hiển thị. Giao diện React hiển thị các thẻ KPI giám sát khu vực sử dụng Recharts (Đối tượng trong khu, Vi phạm loại xe, Xe nâng/container hoạt động, Tổng số zone).
 - Rationale: Đảm bảo an toàn lao động và ngăn chặn truy cập trái phép vào vùng cấm trong khu vực bãi kiểm/kho hàng.
 - Priority: P0
 - Source: User RFP & UI Mockup (Prototype: Màn 1b - Giám sát khu vực)
-- Acceptance criteria: 1. Mô hình YOLOv26 xác định chính xác bounding box và vị trí tâm đối tượng nằm trong hay ngoài đa giác zone (Point-in-polygon). 2. UI khu vực nhận snapshot metadata realtime theo frame/sampling interval mà không cần polling `events` để cập nhật overlay hoặc KPI gần realtime. 3. Phát cảnh báo ngay lập tức nếu loại đối tượng nằm trong danh sách cấm của zone. 4. Sự kiện vi phạm khu vực ghi nhận được camera, zone, loại đối tượng và lý do vi phạm theo nghĩa "đối tượng thuộc danh sách cấm đi vào zone". 5. Hiển thị danh sách sự kiện khu vực trên React Event Feed với trạng thái rõ ràng (Được phép, Vi phạm) như một lane dẫn xuất riêng khỏi metadata lane. 6. Hiển thị đầy đủ bộ 4 thẻ KPI thống kê realtime cho khu vực bãi kiểm qua Recharts visualizers.
+- Acceptance criteria: 1. Mô hình YOLOv11s finetune xác định và hiển thị bbox cho Area Monitoring theo ngưỡng hiển thị cấu hình được, không làm mất bbox chỉ vì ngưỡng stream cao hơn ngưỡng detector/metadata. 2. UI khu vực nhận snapshot metadata realtime theo frame/sampling interval mà không cần polling `events` để cập nhật overlay hoặc KPI gần realtime. 3. Bbox display threshold được tách khỏi event/cảnh báo threshold; detection có thể hiển thị để quan sát nhưng chưa tạo event nếu chưa qua rule ổn định. 4. Zone hit/violation được xác định theo rule hình học theo nhóm đối tượng: bottom-center cho người/xe máy/xe đạp; footprint overlap cho xe nâng/xe tải/container-truck/xe con/xe cẩu; overlap ratio riêng cho container/shipping_container. 5. Event/cảnh báo Mức 3 chỉ được sinh khi đối tượng thuộc danh sách cấm vi phạm zone ổn định trong một khoảng ngắn, ví dụ khoảng 3 frame hoặc 0.5 giây, thay vì chỉ một bbox nhấp nháy. 6. Bbox container/shipping_container mặc định có thể ẩn để giảm rối stream nhưng có chế độ debug bật hiển thị khi kiểm tra model. 7. Sự kiện vi phạm khu vực ghi nhận được camera, zone, loại đối tượng và lý do vi phạm theo nghĩa "đối tượng thuộc danh sách cấm đi vào zone". 8. Hiển thị danh sách sự kiện khu vực trên React Event Feed với trạng thái rõ ràng (Được phép, Vi phạm) như một lane dẫn xuất riêng khỏi metadata lane. 9. Hiển thị đầy đủ bộ 4 thẻ KPI thống kê realtime cho khu vực bãi kiểm qua Recharts visualizers.
 - Status: approved
 - Delivery classification: changed
 
@@ -103,11 +113,11 @@ Hệ thống cung cấp giải pháp giám sát an ninh camera AI tự động c
 
 ## REQ-004 Khử trùng lặp sự kiện (Event Deduplication & Cooldown)
 
-- Behavior: Áp dụng cơ chế cửa sổ thời gian (Cooldown 10-15 giây) cho mỗi đối tượng/biển số trong cùng một Zone trên `event/alert lane`. Khi một đối tượng đứng yên hoặc di chuyển trong zone liên tục, hệ thống chỉ sinh 1 Event chính, 1 Clip 10s đại diện và, với CR-005, chỉ 1 thông báo Telegram cho event đầu tiên đã qua dedup. Cooldown không được chặn việc phát `realtime metadata lane`; metadata snapshot cho giám sát khu vực vẫn phải tiếp tục được publish để UI cập nhật trạng thái frame-to-frame mà không làm giật lag giao diện.
+- Behavior: Áp dụng cơ chế cửa sổ thời gian (Cooldown 10-15 giây) cho mỗi đối tượng/biển số trong cùng một Zone trên `event/alert lane`. Khi một đối tượng đứng yên hoặc di chuyển trong zone liên tục, hệ thống chỉ sinh 1 Event chính, 1 Clip 10s đại diện và, với CR-005, chỉ 1 thông báo Telegram cho event đầu tiên đã qua dedup. Với CR-007, detection/event contract được chuẩn bị để mang `track_id` optional khi có tracking trong tương lai; CR-007 chưa bắt buộc triển khai ByteTrack/BoT-SORT và dedup theo track_id, nhưng không được khóa thiết kế vào duy nhất `object_class` nếu runtime có định danh đối tượng ổn định. Cooldown không được chặn việc phát `realtime metadata lane`; metadata snapshot cho giám sát khu vực vẫn phải tiếp tục được publish để UI cập nhật trạng thái frame-to-frame mà không làm giật lag giao diện.
 - Rationale: Giảm nhiễu báo động giả, tối ưu dung lượng đĩa cứng lưu trữ clip và giữ chất lượng dữ liệu sạch cho AI Q&A.
 - Priority: P0
 - Source: Khách hàng xác nhận (Q1 interview & RFP)
-- Acceptance criteria: 1. Trong vòng 15s, cùng một biển số/đối tượng lưu lại trong zone chỉ tạo đúng 1 bản ghi sự kiện. 2. Trong cùng cửa sổ cooldown, cùng một đối tượng trong cùng zone cấm không được gửi thêm Telegram nếu đã gửi cho event đầu tiên. 3. Nếu đối tượng rời zone và quay lại sau khoảng thời gian cooldown, sự kiện mới được khởi tạo bình thường và hiển thị lên React UI Feed. 4. Trong suốt thời gian cooldown, metadata lane vẫn tiếp tục phản ánh sự hiện diện/chuyển động của đối tượng trên dashboard khu vực.
+- Acceptance criteria: 1. Trong vòng 15s, cùng một biển số/đối tượng lưu lại trong zone chỉ tạo đúng 1 bản ghi sự kiện. 2. Trong cùng cửa sổ cooldown, cùng một đối tượng trong cùng zone cấm không được gửi thêm Telegram nếu đã gửi cho event đầu tiên. 3. Nếu đối tượng rời zone và quay lại sau khoảng thời gian cooldown, sự kiện mới được khởi tạo bình thường và hiển thị lên React UI Feed. 4. Trong suốt thời gian cooldown, metadata lane vẫn tiếp tục phản ánh sự hiện diện/chuyển động của đối tượng trên dashboard khu vực. 5. Detection metadata có thể chứa `track_id` optional khi runtime cung cấp, và các consumer hiện tại vẫn hoạt động khi `track_id` vắng mặt.
 - Status: approved
 - Delivery classification: changed
 
@@ -153,11 +163,11 @@ Hệ thống cung cấp giải pháp giám sát an ninh camera AI tự động c
 
 ## REQ-009 Cảnh báo Tức thì Đa kênh cho Bảo vệ / Người thực thi (Real-time Multi-channel Alerts)
 
-- Behavior: Khi phát sinh sự kiện Mức 3 (Vi phạm zone cấm / Xe cấm xâm nhập), hệ thống phát âm thanh cảnh báo còi hiệu thời gian thực thông qua React shared component `<AudioBeepPlayer>` (Web Audio API context) và popup nổi bật trên React UI, đồng thời gửi thông báo qua Telegram Bot / Zalo OA. Với CR-005, khi đối tượng thuộc danh sách cấm đi vào zone trong luồng giám sát khu vực, Telegram Bot phải gửi trực tiếp file video clip chứng cứ 10s kèm tin nhắn có thời gian vi phạm đúng, camera, zone, loại đối tượng và lý do vi phạm. Lane cảnh báo Mức 3 phải được dẫn xuất từ event đã qua phân loại/dedup, không lấy trực tiếp từ metadata snapshot để tránh lặp còi hoặc cảnh báo giả.
+- Behavior: Khi phát sinh sự kiện Mức 3 (Vi phạm zone cấm / Xe cấm xâm nhập), hệ thống phát âm thanh cảnh báo còi hiệu thời gian thực thông qua React shared component `<AudioBeepPlayer>` (Web Audio API context) và popup nổi bật trên React UI, đồng thời gửi thông báo qua Telegram Bot / Zalo OA. Với CR-005, khi đối tượng thuộc danh sách cấm đi vào zone trong luồng giám sát khu vực, Telegram Bot phải gửi trực tiếp file video clip chứng cứ 10s kèm tin nhắn có thời gian vi phạm đúng, camera, zone, loại đối tượng và lý do vi phạm. Với CR-007, lane cảnh báo Mức 3 chỉ được dẫn xuất từ event đã qua phân loại, dedup và kiểm tra ổn định ngắn; bbox hiển thị trên stream không tự kích hoạt audio/notification nếu chưa đủ điều kiện event hợp lệ.
 - Rationale: Đảm bảo lực lượng an ninh phản ứng tức thì với các vi phạm mà không cần ngồi giám sát liên tục màn hình.
 - Priority: P1
 - Source: Khách hàng đề xuất & xác nhận bổ sung
-- Acceptance criteria: 1. Component `<AudioBeepPlayer>` phát tiếng bíp còi hiệu ngay trên trình duyệt khi có WebSocket event Mức 3 từ event lane đã dedup. 2. Với vi phạm khu vực do đối tượng thuộc danh sách cấm đi vào zone, Telegram Bot gửi tin nhắn chứa tối thiểu thời gian vi phạm đúng, camera, zone, loại đối tượng và lý do vi phạm. 3. Telegram Bot gửi trực tiếp file video clip chứng cứ 10s gắn với cùng event vi phạm khu vực. 4. Thời gian vi phạm đúng là thời điểm frame đầu tiên được xác nhận là vi phạm sau khi qua luật zone và dedup, không phải thời điểm bắt đầu clip hoặc thời điểm lưu event. 5. Nếu gửi Telegram thất bại, event và clip vẫn được lưu, UI vẫn cảnh báo, và lỗi gửi Telegram được ghi nhận để kiểm tra sau. 6. Metadata lane có thể phản ánh đối tượng vi phạm trước hoặc đồng thời với alert, nhưng không được tự kích hoạt audio/notification nếu chưa có event Mức 3 hợp lệ.
+- Acceptance criteria: 1. Component `<AudioBeepPlayer>` phát tiếng bíp còi hiệu ngay trên trình duyệt khi có WebSocket event Mức 3 từ event lane đã dedup. 2. Với vi phạm khu vực do đối tượng thuộc danh sách cấm đi vào zone, Telegram Bot gửi tin nhắn chứa tối thiểu thời gian vi phạm đúng, camera, zone, loại đối tượng và lý do vi phạm. 3. Telegram Bot gửi trực tiếp file video clip chứng cứ 10s gắn với cùng event vi phạm khu vực. 4. Thời gian vi phạm đúng là thời điểm frame đầu tiên được xác nhận là vi phạm sau khi qua luật zone, kiểm tra ổn định ngắn và dedup, không phải thời điểm bắt đầu clip hoặc thời điểm lưu event. 5. Nếu gửi Telegram thất bại, event và clip vẫn được lưu, UI vẫn cảnh báo, và lỗi gửi Telegram được ghi nhận để kiểm tra sau. 6. Metadata lane hoặc bbox stream có thể phản ánh đối tượng nghi ngờ/vi phạm trước hoặc đồng thời với alert, nhưng không được tự kích hoạt audio/notification nếu chưa có event Mức 3 hợp lệ.
 - Status: approved
 - Delivery classification: changed
 

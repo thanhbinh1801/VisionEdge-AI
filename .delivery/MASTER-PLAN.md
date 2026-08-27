@@ -1,40 +1,43 @@
 ---
 artifact: MASTER-PLAN.md
-version: 2.3.0
+version: 2.4.0
 owner: plan-delivery
 status: approved
-updated_at: "2026-08-26T15:32:21+07:00"
+updated_at: "2026-08-27T20:10:00+07:00"
 depends_on: REQUIREMENTS.md, ARCHITECTURE.md, TECHNICAL-RISKS.md, ADR-001-monolithic-python-fastapi.md, ADR-002-point-in-polygon-zone-evaluation.md, ADR-003-event-cooldown-deduplication.md, ADR-004-llm-text-to-sql-with-fallback.md, ADR-005-Custom-Label-Matching-Architecture.md
 ---
 
 Delivery scope: change-request
 
-# Kế hoạch Triển khai Dự án Giám sát Camera AI (SentriAI Mini) - CR-001 đến CR-005
+# Kế hoạch Triển khai Dự án Giám sát Camera AI (SentriAI Mini) - CR-001 đến CR-007
 
 ## 1. Tổng quan Chiến lược Triển khai
 
-Phạm vi master plan hiện tại bao phủ 5 change request:
+Phạm vi master plan hiện tại bao phủ 6 change request:
 - `CR-001`: luồng giám sát cổng/khu vực, zone rules, whitelist/dataset nền tảng.
 - `CR-002`: hoàn thiện UI dùng chung, alert flows, chatbot và nghiệm thu tích hợp.
 - `CR-003`: tách `Area Zone Monitoring` thành `video stream lane`, `realtime metadata lane`, `event/alert lane`, đồng thời đưa zone rules vào cache in-memory để loại DB khỏi hot path mỗi frame.
 - `CR-004`: chuyển tab `Cài đặt > Nhãn đối tượng` từ mock/local state sang flow dữ liệu thật gồm import ảnh/video, chọn frame, bbox samples persisted, CRUD nhãn custom mềm và đồng bộ zone rules.
 - `CR-005`: gửi Telegram evidence notification cho vi phạm khu vực do đối tượng cấm đi vào zone, gồm thời gian vi phạm đúng, camera, zone, loại đối tượng, lý do vi phạm và file video clip chứng cứ 10s.
+- `CR-007`: cải thiện độ tin cậy Area Monitoring trên `BAI-KIEM` bằng YOLOv11s finetune, tách display/debug threshold khỏi event/alert threshold, chuẩn hóa class-aware zone evaluation, bổ sung metadata debug additive và giữ tracking ở mức optional/future-compatible.
 
-Hệ thống được tổ chức theo 4 Phase chính:
+Hệ thống được tổ chức theo 7 Phase chính:
 - **Phase 1: Project Initialization & Global Foundation Design**: Khởi tạo khung dự án (Backend & Frontend Scaffold), thiết kế hợp đồng toàn cục `API-FOUNDATION.md`, `DATABASE-DESIGN.md` và `UI-UX-FOUNDATION.md`.
-- **Phase 2: Core Data Layer, Engines & Shared Components**: Phát triển CSDL SQLite (Xe quen/Xe lạ, Polygon zone rules, Custom BBox dataset samples), Core AI Engine (8 nhóm phương tiện/người, Point-in-Polygon, Cooldown) và bộ Shared Components.
+- **Phase 2: Core Data Layer, Engines & Shared Components**: Phát triển CSDL SQLite (Xe quen/Xe lạ, Polygon zone rules, Custom BBox dataset samples), Core AI Engine (8 nhóm phương tiện/người, zone evaluation, Cooldown) và bộ Shared Components.
 - **Phase 3: Module Implementation & System Integration**: Triển khai 4 Trang/Tab chính (Gate Dashboard LPR, Area Security Dashboard, Zone & Tag Settings với SVG Canvas 4 thao tác & BBox dataset tool, AI Chatbot Assistant với clip 10s bằng chứng), sau đó bổ sung refactor realtime area metadata cho `CR-003` và verification liên quan.
 - **Phase 4: CR-004 Real Object Labeling Flow**: Thiết kế DB/storage, API và UI/UX cho object labeling thật, sau đó triển khai backend/frontend và nghiệm thu end-to-end.
 - **Phase 5: CR-005 Telegram Evidence Notification**: Thiết kế contract event/alert evidence, triển khai backend Telegram gửi file video 10s trực tiếp kèm nội dung bắt buộc, kiểm tra nhất quán AI Assistant evidence và nghiệm thu end-to-end cho thông báo Telegram.
+- **Phase 6: Gemini LLM Text-to-SQL cho AI Chatbot**: Tích hợp Gemini vào AI Assistant với fallback an toàn.
+- **Phase 7: CR-007 Area Monitoring Detection & BBox Reliability**: Thiết kế/triển khai lại contract phát hiện khu vực theo YOLOv11s finetune, threshold layering, bbox renderer debug container, class-aware zone evaluation và verification regression không làm đổi LPR/GATE-01.
 
 ## 2. Tổng quan Task Inventory
 
-- Tổng số task hiện có trong master plan: `28`
-- Dải task hiện dùng: `TASK-001` đến `TASK-029`, trừ `TASK-011` hiện chưa được cấp phát
+- Tổng số task hiện có trong master plan: `32`
+- Dải task hiện dùng: `TASK-001` đến `TASK-033`, trừ `TASK-011` hiện chưa được cấp phát
 - Nhóm foundation/design: `TASK-001` đến `TASK-005`, `TASK-016`
-- Nhóm feature design: `TASK-020`, `TASK-021`, `TASK-022`, `TASK-026`
-- Nhóm implementation: `TASK-006` đến `TASK-010`, `TASK-012` đến `TASK-014`, `TASK-017`, `TASK-018`, `TASK-023`, `TASK-024`, `TASK-027`, `TASK-029`
-- Nhóm verification/diagnosis: `TASK-015`, `TASK-019`, `TASK-025`, `TASK-028`
+- Nhóm feature design: `TASK-020`, `TASK-021`, `TASK-022`, `TASK-026`, `TASK-030`
+- Nhóm implementation: `TASK-006` đến `TASK-010`, `TASK-012` đến `TASK-014`, `TASK-017`, `TASK-018`, `TASK-023`, `TASK-024`, `TASK-027`, `TASK-029`, `TASK-031`, `TASK-032`
+- Nhóm verification/diagnosis: `TASK-015`, `TASK-019`, `TASK-025`, `TASK-028`, `TASK-033`
 
 ### Danh sách task hiện hữu
 
@@ -68,6 +71,10 @@ Hệ thống được tổ chức theo 4 Phase chính:
 | `TASK-027` | `backend-implementation` | Backend Telegram evidence notification cho vi phạm khu vực |
 | `TASK-028` | `verify-feature` | Verification end-to-end cho CR-005 Telegram evidence |
 | `TASK-029` | `backend-implementation` | Tích hợp Google Gemini LLM Text-to-SQL cho AI Chatbot |
+| `TASK-030` | `api-design` | CR-007 contract cho Area detection, bbox debug và zone evaluation |
+| `TASK-031` | `backend-implementation` | CR-007 backend detection threshold, class mapping và zone evaluator |
+| `TASK-032` | `frontend-implementation` | CR-007 frontend debug controls/type surface cho Area Dashboard |
+| `TASK-033` | `verify-feature` | CR-007 verification và regression không đổi LPR/GATE-01 |
 
 ---
 
@@ -84,23 +91,23 @@ Hệ thống được tổ chức theo 4 Phase chính:
 - Task type: foundation-design
 - Scope: global
 - Module: none
-- Linked requirements: REQ-001, REQ-002, CR-002
+- Linked requirements: REQ-001, REQ-002, CR-002, CR-007
 - Capability: backend-implementation
 - Dependencies: none
 - Inputs: .delivery/REQUIREMENTS.md, .delivery/ARCHITECTURE.md
 - Outputs: docs/reports/ai-model-benchmark.md
-- Completion gate: Benchmark mô hình Ultralytics YOLOv26 kết hợp OCR đạt FPS >= 5 trên 2 tệp video mẫu.
+- Completion gate: Benchmark mô hình LPR hiện hữu cho `GATE-01` và YOLOv11s finetune cho Area Monitoring `BAI-KIEM` đạt FPS >= 5 trên 2 tệp video mẫu; ghi rõ inference threshold thấp và application threshold riêng cho CR-007.
 - Verification method: python -m pytest backend/tests/test_model_benchmark.py
 - Parallelizable: yes
 - Write scope: docs/reports/
 - Wave: 1
-- Status: ready
+- Status: in-review
 
 #### TASK-002 Thiết kế Hợp đồng Global API Foundation
 - Task type: foundation-design
 - Scope: global
 - Module: none
-- Linked requirements: REQ-001, REQ-002, REQ-003, REQ-005, REQ-008, REQ-009, CR-001, CR-002
+- Linked requirements: REQ-001, REQ-002, REQ-003, REQ-005, REQ-008, REQ-009, CR-001, CR-002, CR-007
 - Capability: api-foundation-design
 - Dependencies: TASK-001
 - Inputs: .delivery/REQUIREMENTS.md, .delivery/ARCHITECTURE.md
@@ -110,7 +117,7 @@ Hệ thống được tổ chức theo 4 Phase chính:
 - Parallelizable: yes
 - Write scope: docs/contracts/api/api-schema.json, docs/contracts/api/websocket-events.json
 - Wave: 1
-- Status: ready
+- Status: needs-revision
 
 #### TASK-005 Khởi tạo Cấu trúc Dự án Backend & Frontend Scaffolding
 - Task type: foundation-design
@@ -196,12 +203,12 @@ Hệ thống được tổ chức theo 4 Phase chính:
 - Dependencies: TASK-001, TASK-006
 - Inputs: .delivery/ARCHITECTURE.md, docs/contracts/API-FOUNDATION.md
 - Outputs: backend/ai/ (Evaluator & Slicer), frontend/src/hooks/ (WebSocket & Sound Hooks)
-- Completion gate: Triển khai phân loại 8 nhóm đối tượng, thuật toán Point-in-Polygon, cửa sổ trượt lọc trùng lặp Cooldown 15s và custom hooks (`useWebSocket`, `useAudioAlert`).
+- Completion gate: Triển khai phân loại nhóm đối tượng, class-aware zone evaluation, cửa sổ trượt lọc trùng lặp Cooldown 15s và custom hooks (`useWebSocket`, `useAudioAlert`).
 - Verification method: python -m pytest backend/tests/test_engine.py
 - Parallelizable: yes
 - Write scope: backend/ai/, frontend/src/hooks/
 - Wave: 1
-- Status: ready
+- Status: needs-revision
 
 #### TASK-008 Phát triển Bộ Shared UI Components
 - Task type: implementation
@@ -248,17 +255,17 @@ Hệ thống được tổ chức theo 4 Phase chính:
 - Task type: implementation
 - Scope: feature
 - Module: web-ui
-- Linked requirements: REQ-002, CR-001, CR-002
+- Linked requirements: REQ-002, CR-001, CR-002, CR-007
 - Capability: frontend-implementation
 - Dependencies: TASK-007, TASK-008
 - Inputs: docs/contracts/API-FOUNDATION.md, docs/contracts/UI-UX-FOUNDATION.md
 - Outputs: frontend/src/pages/AreaSecurityDashboard.tsx
-- Completion gate: Trang Bãi kiểm render stream BAI-KIEM, phát hiện vi phạm quy tắc zone 8 loại đối tượng bằng YOLOv26 và bộ thẻ quy tắc phương tiện understream.
+- Completion gate: Trang Bãi kiểm render stream BAI-KIEM, consume metadata lane, hỗ trợ debug bbox/threshold CR-007 khi cần và giữ event/alert lane tách biệt.
 - Verification method: npm --prefix frontend run build
 - Parallelizable: yes
 - Write scope: frontend/src/pages/AreaSecurityDashboard.tsx
 - Wave: 1
-- Status: ready
+- Status: in-review
 
 ### Wave 2 (Zone Settings & AI Chatbot)
 
@@ -316,7 +323,7 @@ Hệ thống được tổ chức theo 4 Phase chính:
 - Task type: verification
 - Scope: global
 - Module: none
-- Linked requirements: REQ-001, REQ-002, REQ-003, REQ-004, REQ-005, REQ-006, REQ-007, REQ-008, REQ-009, CR-001, CR-002
+- Linked requirements: REQ-001, REQ-002, REQ-003, REQ-004, REQ-005, REQ-006, REQ-007, REQ-008, REQ-009, CR-001, CR-002, CR-007
 - Capability: verify-feature
 - Dependencies: TASK-009, TASK-010, TASK-012, TASK-013, TASK-014
 - Inputs: .delivery/REQUIREMENTS.md, .delivery/ARCHITECTURE.md
@@ -326,7 +333,7 @@ Hệ thống được tổ chức theo 4 Phase chính:
 - Parallelizable: no
 - Write scope: docs/reports/
 - Wave: 3
-- Status: ready
+- Status: needs-revision
 
 ### Wave 4 (CR-003 Area Metadata Refactor)
 
@@ -599,25 +606,104 @@ Hệ thống được tổ chức theo 4 Phase chính:
 - Wave: 1
 - Status: planned
 
+## Phase 7 — CR-007 Area Monitoring Detection & BBox Reliability
+
+- Gate: integration-check
+- Integration commands: python -m pytest backend/tests/test_ai_engine.py backend/tests/test_video_frame_api.py backend/tests/test_area_metadata_runtime.py backend/tests/test_live_detections_event.py -q && npm --prefix frontend run build
+
+### Wave 1 (Contract and Runtime Semantics)
+
+#### TASK-030 CR-007 Contract cho Area Detection, BBox Debug và Zone Evaluation
+- Task type: feature-design
+- Scope: feature
+- Module: api-gateway
+- Linked requirements: REQ-002, REQ-004, REQ-009, CR-007
+- Capability: api-design
+- Dependencies: TASK-016
+- Inputs: .delivery/REQUIREMENTS.md, .delivery/ARCHITECTURE.md, .delivery/API-CONTRACT.md, .delivery/changes/CR-007/CHANGE-IMPACT.md, docs/contracts/api/api-schema.json, docs/contracts/api/websocket-events.json
+- Outputs: .delivery/tasks/TASK-030/API-CONTRACT.md, .delivery/tasks/TASK-030/TASK-RESULT.md
+- Completion gate: Contract xác định rõ YOLOv11s finetune cho `BAI-KIEM`, display/debug threshold tách khỏi event/alert threshold, `show_static_containers`, metadata fields additive, class-aware zone evaluation method/ratio và `track_id` optional/future-compatible.
+- Verification method: python -m json.tool docs/contracts/api/api-schema.json && python -m json.tool docs/contracts/api/websocket-events.json
+- Parallelizable: no
+- Parallel-safety notes: Thiết kế này cập nhật contract runtime khu vực; không thay đổi LPR/GATE-01 ngoài regression boundary.
+- Write scope: .delivery/API-CONTRACT.md, docs/contracts/api/api-schema.json, docs/contracts/api/websocket-events.json, .delivery/tasks/TASK-030/
+- Wave: 1
+- Status: planned
+
+### Wave 2 (Backend and Frontend Implementation)
+
+#### TASK-031 CR-007 Backend Detection Threshold, Class Mapping và Zone Evaluator
+- Task type: implementation
+- Scope: feature
+- Module: ai-vision-pipeline
+- Linked requirements: REQ-002, REQ-004, REQ-009, CR-007
+- Capability: backend-implementation
+- Dependencies: TASK-030, TASK-017
+- Inputs: .delivery/REQUIREMENTS.md, .delivery/ARCHITECTURE.md, .delivery/ADR/ADR-002-point-in-polygon-zone-evaluation.md, .delivery/API-CONTRACT.md, backend/app/services/vision_pipeline.py, backend/app/services/video_stream.py, backend/app/services/area_metadata.py, backend/app/api/v1/events.py
+- Outputs: backend area detection runtime updates, backend tests, .delivery/tasks/TASK-031/TASK-RESULT.md
+- Completion gate: Area Monitoring dùng YOLOv11s finetune, inference threshold thấp và application/per-class threshold tách biệt; class mapping giữ `raw_class`/`canonical_class`; zone evaluation dùng bottom-center/footprint overlap/container overlap ratio; MJPEG có `show_static_containers`; metadata giữ backward compatibility.
+- Verification method: python -m pytest backend/tests/test_ai_engine.py backend/tests/test_video_frame_api.py backend/tests/test_area_metadata_runtime.py backend/tests/test_live_detections_event.py -q
+- Parallelizable: no
+- Parallel-safety notes: Không triển khai ByteTrack/BoT-SORT đầy đủ trong CR-007; chỉ trả/giữ `track_id` khi runtime đã có. Không sửa business flow LPR/GATE-01 ngoài regression.
+- Write scope: backend/app/services/vision_pipeline.py, backend/app/services/video_stream.py, backend/app/services/area_metadata.py, backend/app/api/v1/events.py, backend/tests/, .delivery/tasks/TASK-031/
+- Wave: 2
+- Status: planned
+
+#### TASK-032 CR-007 Frontend Debug Controls và Type Surface cho Area Dashboard
+- Task type: implementation
+- Scope: feature
+- Module: web-ui
+- Linked requirements: REQ-002, REQ-004, REQ-009, CR-007
+- Capability: frontend-implementation
+- Dependencies: TASK-030, TASK-031
+- Inputs: .delivery/API-CONTRACT.md, frontend/src/pages/AreaSecurityDashboard.tsx, frontend/src/services/api.ts, frontend/src/types/
+- Outputs: frontend Area Dashboard/type updates, .delivery/tasks/TASK-032/TASK-RESULT.md
+- Completion gate: Frontend type surface chấp nhận metadata additive CR-007; Area Dashboard có thể truyền `conf_threshold` và `show_static_containers` cho debug mà không đổi layout nghiệp vụ chính hoặc event/alert behavior.
+- Verification method: npx --prefix frontend tsc --noEmit && npm --prefix frontend run build
+- Parallelizable: no
+- Parallel-safety notes: Không thay đổi Gate Dashboard hoặc LPR flow; debug controls chỉ áp dụng Area Dashboard.
+- Write scope: frontend/src/pages/AreaSecurityDashboard.tsx, frontend/src/services/api.ts, frontend/src/types/, .delivery/tasks/TASK-032/
+- Wave: 2
+- Status: planned
+
+### Wave 3 (CR-007 Verification)
+
+#### TASK-033 CR-007 Verification và Regression Không đổi LPR/GATE-01
+- Task type: verification
+- Scope: global
+- Module: none
+- Linked requirements: REQ-001, REQ-002, REQ-004, REQ-009, CR-007
+- Capability: verify-feature
+- Dependencies: TASK-031, TASK-032
+- Inputs: .delivery/REQUIREMENTS.md, .delivery/API-CONTRACT.md, .delivery/ADR/ADR-002-point-in-polygon-zone-evaluation.md, .delivery/changes/CR-007/CHANGE-IMPACT.md, backend/frontend implementation under backend/app/ and frontend/src/
+- Outputs: .delivery/tasks/TASK-033/TEST-REPORT.md, .delivery/tasks/TASK-033/TASK-RESULT.md, bug records if verification fails
+- Completion gate: Xác minh bbox display threshold không tự sinh event/alert, class-aware zone evaluation đúng theo nhóm đối tượng, container bbox debug bật/tắt được, metadata additive tương thích ngược, stream vẫn đạt FPS >= 5 và LPR/GATE-01 không đổi ngoài regression evidence.
+- Verification method: python -m pytest backend/tests/test_ai_engine.py backend/tests/test_video_frame_api.py backend/tests/test_area_metadata_runtime.py backend/tests/test_live_detections_event.py -q && npm --prefix frontend run build
+- Parallelizable: no
+- Parallel-safety notes: Verification không sửa production code và không mở rộng tracking persistence.
+- Write scope: .delivery/tasks/TASK-033/
+- Wave: 3
+- Status: planned
+
 
 ---
 
 ## 4. Bản đồ Bao phủ Yêu cầu (Coverage Map)
 
 ## Coverage Map
-- REQ-001 -> TASK-001, TASK-002, TASK-003, TASK-004, TASK-005, TASK-006, TASK-009, TASK-015
-- REQ-002 -> TASK-001, TASK-002, TASK-003, TASK-004, TASK-005, TASK-010, TASK-015
-- REQ-002 -> TASK-001, TASK-002, TASK-003, TASK-004, TASK-005, TASK-010, TASK-015, TASK-016, TASK-017, TASK-018, TASK-019, TASK-026, TASK-027, TASK-028
+- REQ-001 -> TASK-001, TASK-002, TASK-003, TASK-004, TASK-005, TASK-006, TASK-009, TASK-015, TASK-033
+- REQ-002 -> TASK-001, TASK-002, TASK-003, TASK-004, TASK-005, TASK-010, TASK-015, TASK-016, TASK-017, TASK-018, TASK-019, TASK-026, TASK-027, TASK-028, TASK-030, TASK-031, TASK-032, TASK-033
 - REQ-003 -> TASK-002, TASK-004, TASK-008, TASK-014, TASK-015, TASK-026, TASK-027, TASK-028
-- REQ-004 -> TASK-007, TASK-015, TASK-016, TASK-017, TASK-019, TASK-026, TASK-027, TASK-028
+- REQ-004 -> TASK-007, TASK-015, TASK-016, TASK-017, TASK-019, TASK-026, TASK-027, TASK-028, TASK-030, TASK-031, TASK-032, TASK-033
 - REQ-005 -> TASK-002, TASK-004, TASK-005, TASK-012, TASK-015, TASK-016, TASK-017, TASK-018, TASK-019, TASK-020, TASK-021, TASK-022, TASK-023, TASK-024, TASK-025
 - REQ-006 -> TASK-003, TASK-006, TASK-012, TASK-015
 - REQ-007 -> TASK-007, TASK-012, TASK-015, TASK-020, TASK-021, TASK-022, TASK-023, TASK-024, TASK-025
 - REQ-008 -> TASK-002, TASK-013, TASK-015, TASK-026, TASK-028, TASK-029
-- REQ-009 -> TASK-002, TASK-008, TASK-014, TASK-015, TASK-016, TASK-017, TASK-018, TASK-019, TASK-026, TASK-027, TASK-028
+- REQ-009 -> TASK-002, TASK-008, TASK-014, TASK-015, TASK-016, TASK-017, TASK-018, TASK-019, TASK-026, TASK-027, TASK-028, TASK-030, TASK-031, TASK-032, TASK-033
 - CR-001 -> TASK-002, TASK-005, TASK-006, TASK-007, TASK-010, TASK-012, TASK-015
-- CR-002 -> TASK-001, TASK-002, TASK-003, TASK-004, TASK-005, TASK-006, TASK-007, TASK-008, TASK-009, TASK-010, TASK-012, TASK-013, TASK-014, TASK-015
+- CR-002 -> TASK-001, TASK-002, TASK-003, TASK-004, TASK-005, TASK-006, TASK-007, TASK-008, TASK-009, TASK-010, TASK-012, TASK-013, TASK-014, TASK-015, TASK-029
 - CR-003 -> TASK-016, TASK-017, TASK-018, TASK-019
 - CR-004 -> TASK-020, TASK-021, TASK-022, TASK-023, TASK-024, TASK-025
 - CR-005 -> TASK-026, TASK-027, TASK-028
+- CR-007 -> TASK-001, TASK-002, TASK-010, TASK-015, TASK-030, TASK-031, TASK-032, TASK-033
 - Gemini LLM (REQ-008) -> TASK-029

@@ -116,3 +116,29 @@ def test_inactive_label_cannot_be_used_for_samples(db_session):
             {"label_id": label.id, "source_id": source.id, "x": 5, "y": 5, "w": 10, "h": 10}
         ])
     assert exc.value.code == "LABEL_INACTIVE"
+
+
+def test_delete_source_removes_samples_and_recomputes_counts(db_session):
+    label_repo = CustomLabelRepository(db_session)
+    dataset_repo = DatasetRepository(db_session)
+    label = label_repo.create_custom("Pallet lech", "vehicle_shape")
+    source = _source(dataset_repo)
+    db_session.commit()
+
+    saved = dataset_repo.save_samples_batch([
+        {"label_id": label.id, "source_id": source.id, "x": 5, "y": 5, "w": 10, "h": 10},
+        {"label_id": label.id, "source_id": source.id, "x": 20, "y": 20, "w": 10, "h": 10},
+    ])
+    assert len(saved) == 2
+    db_session.refresh(label)
+    assert label.sample_count == 2
+
+    deleted_source, affected_label_ids, deleted_sample_count = dataset_repo.delete_source(source.id)
+
+    assert deleted_source.id == source.id
+    assert affected_label_ids == {label.id}
+    assert deleted_sample_count == 2
+    assert dataset_repo.get_source(source.id) is None
+    assert dataset_repo.get_samples(source_id=source.id) == []
+    db_session.refresh(label)
+    assert label.sample_count == 0

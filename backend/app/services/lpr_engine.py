@@ -1,6 +1,6 @@
 """LPR OCR Engine cho camera cổng GATE-01 (REQ-001, TASK-007/BUG-002).
 
-Tách riêng khỏi vision_pipeline.py vì hai thứ có vòng đời khác nhau: YOLO-World nạp
+Tách riêng khỏi vision_pipeline.py vì hai thứ có vòng đời khác nhau: YOLOv11s nạp
 ngay lúc khởi động cho cả 3 camera, còn EasyOCR chỉ cần cho đúng một camera cổng.
 Nạp EasyOCR ở __init__ sẽ kéo torch + tải model detection/recognition vào mọi tiến
 trình, kể cả khi người dùng chỉ mở tab giám sát khu vực — nên reader ở đây là lazy.
