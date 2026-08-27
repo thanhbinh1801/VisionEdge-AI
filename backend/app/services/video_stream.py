@@ -7,14 +7,21 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
-from app.services.frame_extractor import resolve_video_path
+from backend.app.services.frame_extractor import resolve_video_path
 
 logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
 class ProcessedFrameSnapshot:
-    """One immutable identity shared by pixels and their detection metadata."""
+    """Pixels of the newest decoded frame, paired with the newest detections available.
+
+    Before CR-006 the two always came from the same frame because inference ran inline
+    in the decode loop, which capped the whole video lane at inference speed. Decode and
+    inference now advance on independent clocks, so detections may trail the pixels by a
+    frame or two; `detection_frame_id` and `detection_age_ms` state that gap explicitly
+    instead of leaving consumers to assume a synchronicity that no longer holds.
+    """
 
     frame_id: int
     captured_at: str
@@ -23,10 +30,13 @@ class ProcessedFrameSnapshot:
     pipeline_latency_ms: float
     source_timestamp_seconds: float = 0.0
     stream_status: str = "online"
+    detection_frame_id: int = 0
+    detection_age_ms: float = 0.0
+    detection_seq: int = 0
 
 
 class CameraFramePipeline:
-    """Stateful per-camera decode -> inference -> zone-evaluation pipeline."""
+    """Stateful per-camera pipeline running decode and inference on separate threads."""
 
     def __init__(
         self,
@@ -46,8 +56,19 @@ class CameraFramePipeline:
         self._zone_version = 0
         self._snapshot: ProcessedFrameSnapshot | None = None
         self._running = False
-        self._thread: threading.Thread | None = None
+        self._decode_thread: threading.Thread | None = None
+        self._inference_thread: threading.Thread | None = None
         self._error: Exception | None = None
+        # Newest decoded frame awaiting inference. The inference loop always takes this
+        # one and lets every frame queued behind it go; a backlog would only ever produce
+        # detections that are already out of date by the time they land.
+        self._pending_frame: Any | None = None
+        self._pending_frame_id = 0
+        self._detections: tuple[dict[str, Any], ...] = ()
+        self._detection_frame_id = 0
+        self._detection_seq = 0
+        self._detection_completed_at: float | None = None
+        self._inference_latency_ms = 0.0
 
     def update_zones(self, zones: list[dict[str, Any]], zone_version: int | None = None) -> None:
         with self._condition:
@@ -61,12 +82,18 @@ class CameraFramePipeline:
                 return
             self._running = True
             self._error = None
-            self._thread = threading.Thread(
-                target=self._run,
-                name=f"camera-pipeline-{self.camera_id}",
+            self._decode_thread = threading.Thread(
+                target=self._decode_loop,
+                name=f"camera-decode-{self.camera_id}",
                 daemon=True,
             )
-            self._thread.start()
+            self._inference_thread = threading.Thread(
+                target=self._inference_loop,
+                name=f"camera-inference-{self.camera_id}",
+                daemon=True,
+            )
+            self._decode_thread.start()
+            self._inference_thread.start()
 
     def get_latest_snapshot(self, timeout: float = 2.0) -> ProcessedFrameSnapshot | None:
         return self.wait_for_snapshot(after_frame_id=None, timeout=timeout)
@@ -74,6 +101,7 @@ class CameraFramePipeline:
     def wait_for_snapshot(
         self, after_frame_id: int | None, timeout: float = 2.0
     ) -> ProcessedFrameSnapshot | None:
+        """Video lane: wake on every newly decoded frame."""
         self.start()
         deadline = time.monotonic() + timeout
         with self._condition:
@@ -93,14 +121,56 @@ class CameraFramePipeline:
                 raise RuntimeError(f"Camera pipeline failed: {self.camera_id}") from self._error
             return self._snapshot
 
+    def wait_for_detection_update(
+        self, after_detection_seq: int | None, timeout: float = 2.0
+    ) -> ProcessedFrameSnapshot | None:
+        """Metadata lane: wake only when inference produced a new result.
+
+        The decode lane now runs several times faster than inference. A metadata consumer
+        waiting on `wait_for_snapshot` would re-publish identical detections at decode
+        speed, and every republish would re-enter violation persistence.
+        """
+        self.start()
+        deadline = time.monotonic() + timeout
+        with self._condition:
+            while (
+                self._error is None
+                and self._running
+                and (
+                    self._snapshot is None
+                    or self._detection_seq == 0
+                    or (
+                        after_detection_seq is not None
+                        and self._detection_seq <= after_detection_seq
+                    )
+                )
+            ):
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                self._condition.wait(remaining)
+            if self._error is not None:
+                raise RuntimeError(f"Camera pipeline failed: {self.camera_id}") from self._error
+            return self._snapshot
+
     def stop(self) -> None:
         with self._condition:
             self._running = False
             self._condition.notify_all()
-        if self._thread and self._thread is not threading.current_thread():
-            self._thread.join(timeout=2.0)
+        current = threading.current_thread()
+        for thread in (self._decode_thread, self._inference_thread):
+            if thread and thread is not current:
+                thread.join(timeout=2.0)
 
-    def _run(self) -> None:
+    def _fail(self, exc: Exception, where: str) -> None:
+        logger.exception("Camera pipeline %s stopped for %s", where, self.camera_id)
+        with self._condition:
+            self._error = exc
+            self._running = False
+            self._condition.notify_all()
+
+    def _decode_loop(self) -> None:
+        """Decode at source cadence and publish pixels without waiting for inference."""
         cap = None
         try:
             import cv2
@@ -123,35 +193,72 @@ class CameraFramePipeline:
 
                 source_frame_index = max(0, int(cap.get(cv2.CAP_PROP_POS_FRAMES) or 1) - 1)
                 source_timestamp_seconds = source_frame_index / source_fps if source_fps > 0 else 0.0
-                with self._condition:
-                    zones = [dict(zone) for zone in self._zones]
-                detections = self.vision_pipeline.process_frame(
-                    frame, zones, conf_threshold=self.inference_threshold
-                )
                 frame_id += 1
-                snapshot = ProcessedFrameSnapshot(
-                    frame_id=frame_id,
-                    captured_at=datetime.now(timezone.utc).isoformat(),
-                    frame=frame,
-                    detections=tuple(dict(item) for item in detections),
-                    pipeline_latency_ms=(time.monotonic() - started_at) * 1000.0,
-                    source_timestamp_seconds=source_timestamp_seconds,
-                )
+
                 with self._condition:
-                    self._snapshot = snapshot
+                    self._pending_frame = frame
+                    self._pending_frame_id = frame_id
+                    detection_age_ms = (
+                        (time.monotonic() - self._detection_completed_at) * 1000.0
+                        if self._detection_completed_at is not None
+                        else 0.0
+                    )
+                    self._snapshot = ProcessedFrameSnapshot(
+                        frame_id=frame_id,
+                        captured_at=datetime.now(timezone.utc).isoformat(),
+                        frame=frame,
+                        detections=self._detections,
+                        pipeline_latency_ms=self._inference_latency_ms,
+                        source_timestamp_seconds=source_timestamp_seconds,
+                        detection_frame_id=self._detection_frame_id,
+                        detection_age_ms=detection_age_ms,
+                        detection_seq=self._detection_seq,
+                    )
                     self._condition.notify_all()
+
                 time.sleep(max(0.0, delay - (time.monotonic() - started_at)))
         except Exception as exc:
-            logger.exception("Camera pipeline stopped for %s", self.camera_id)
-            with self._condition:
-                self._error = exc
-                self._condition.notify_all()
+            self._fail(exc, "decode")
         finally:
             if cap is not None:
                 cap.release()
             with self._condition:
                 self._running = False
                 self._condition.notify_all()
+
+    def _inference_loop(self) -> None:
+        """Run detection on the newest decoded frame, dropping any that piled up."""
+        try:
+            last_inferred_frame_id = 0
+            while self._running:
+                with self._condition:
+                    while self._running and self._pending_frame_id <= last_inferred_frame_id:
+                        self._condition.wait(0.5)
+                    if not self._running:
+                        return
+                    frame = self._pending_frame
+                    frame_id = self._pending_frame_id
+                    zones = [dict(zone) for zone in self._zones]
+
+                if frame is None:
+                    continue
+
+                started_at = time.monotonic()
+                detections = self.vision_pipeline.process_frame(
+                    frame, zones, conf_threshold=self.inference_threshold
+                )
+                latency_ms = (time.monotonic() - started_at) * 1000.0
+                last_inferred_frame_id = frame_id
+
+                with self._condition:
+                    self._detections = tuple(dict(item) for item in detections)
+                    self._detection_frame_id = frame_id
+                    self._detection_seq += 1
+                    self._detection_completed_at = time.monotonic()
+                    self._inference_latency_ms = latency_ms
+                    self._condition.notify_all()
+        except Exception as exc:
+            self._fail(exc, "inference")
 
 
 _camera_pipeline_lock = threading.Lock()

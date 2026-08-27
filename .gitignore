@@ -65,3 +65,8 @@ HANDOFF.md
 # Ảnh xác minh zone: sinh lại được bằng backend/scripts/render_zone_overlay.py,
 # mỗi lần chạy ra vài MB PNG nên không đưa vào lịch sử git.
 docs/verification/
+# Backup DB thu cong: *.db khong bat duoc duoi -bak-YYYYMMDD
+*.db.bak-*
+# Media upload cua dataset: rule data/** chi tinh tu goc repo, khong phu backend/data
+backend/data/dataset/
+vite.config.ts.timestamp-*.mjs

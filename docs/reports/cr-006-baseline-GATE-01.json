@@ -1,0 +1,32 @@
+{
+  "measured_at": "2026-08-27T11:09:00+07:00",
+  "camera_id": "GATE-01",
+  "video_path": "D:\\hilab\\Project_W3+4\\VisionEdge-AI\\data\\video\\GATE-01.mp4",
+  "model_weights": "sentri-yolo11s.pt",
+  "decode": {
+    "source_fps": 25.0,
+    "decode_only_fps": 218.79,
+    "frames_decoded": 2188
+  },
+  "inference": {
+    "frame_shape": "1274x720",
+    "inference_mean_ms": 364.1,
+    "inference_p95_ms": 581.6,
+    "inference_fps": 2.75,
+    "samples": 8
+  },
+  "pipeline": {
+    "publish_fps": 2.92,
+    "publish_gap_mean_ms": 342.7,
+    "publish_gap_max_ms": 640.4,
+    "detection_age_mean_ms": 0.0,
+    "detection_age_max_ms": 0.0,
+    "realtime_ratio": 0.117,
+    "frames_published": 30
+  },
+  "verdict": {
+    "video_lane_capped_by_inference": true,
+    "meets_global_ac1_fps_5": false,
+    "drifts_behind_realtime": true
+  }
+}
