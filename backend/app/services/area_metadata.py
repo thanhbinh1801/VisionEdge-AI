@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from app.services.vision_pipeline import OBJECT_VIETNAMESE_NAMES
+from backend.app.services.vision_pipeline import OBJECT_VIETNAMESE_NAMES
 from backend.app.services.video_stream import ProcessedFrameSnapshot
 from backend.app.services.zone_cache import ZoneCacheState
 

@@ -8,6 +8,7 @@ from backend.app.services.area_metadata import build_area_metadata_event
 from backend.app.services.video_stream import ProcessedFrameSnapshot
 from backend.app.services.zone_cache import ZoneCacheState, zone_cache_service
 from backend.database.engine import SessionLocal, get_sqlite_engine, init_db
+from backend.tests.conftest import SCHEMA_SQL_PATH
 from backend.database.models import Camera, Zone
 
 TEST_DB_URL = "sqlite:///./test_area_metadata_runtime.db"
@@ -16,7 +17,7 @@ TEST_DB_URL = "sqlite:///./test_area_metadata_runtime.db"
 @pytest.fixture(scope="module")
 def test_engine():
     engine = get_sqlite_engine(TEST_DB_URL)
-    init_db(schema_sql_path="docs/contracts/db/schema.sql", target_engine=engine)
+    init_db(schema_sql_path=str(SCHEMA_SQL_PATH), target_engine=engine)
     yield engine
     engine.dispose()
 

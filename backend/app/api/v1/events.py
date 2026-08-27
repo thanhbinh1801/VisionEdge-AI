@@ -13,11 +13,15 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from app.services.frame_extractor import resolve_video_path
+from backend.app.services.frame_extractor import (
+    VideoSourceUnavailableError,
+    resolve_video_path,
+)
 from backend.app.core.config import settings
 from backend.app.services.alert_dispatcher import alert_dispatcher
 from backend.app.services.area_metadata import build_area_metadata_event
 from backend.app.services.event_manager import EventManager
+from backend.app.services.lpr_engine import lpr_engine
 from backend.app.services.video_stream import get_camera_pipeline
 from backend.app.services.vision_pipeline import (
     OBJECT_VIETNAMESE_NAMES,
@@ -26,7 +30,8 @@ from backend.app.services.vision_pipeline import (
 from backend.app.services.zone_cache import zone_cache_service
 from backend.database.engine import get_db
 from backend.database.models import Event as EventModel
-from backend.database.repository import EventRepository
+from backend.database.models import Vehicle as VehicleModel
+from backend.database.repository import EventRepository, KpiRepository, VehicleRepository
 
 router = APIRouter()
 vision_pipeline = AIVisionPipeline()
@@ -34,8 +39,64 @@ event_manager = EventManager(
     cooldown_seconds=settings.EVENT_COOLDOWN_SECONDS,
     clips_dir=settings.CLIPS_DIR,
 )
+
+# Camera cổng là camera duy nhất chạy LPR; hai camera còn lại là giám sát khu vực và
+# không có tấm biển nào để đọc, nên không được trả giá lazy-load EasyOCR (REQ-001).
+GATE_CAMERA_ID = "GATE-01"
+
+# Chỉ phương tiện có gắn biển mới đưa qua OCR. 'bicycle' và 'person' bị loại vì không
+# có biển; 'forklift'/'crane' là máy móc nội bộ trong bãi, không đi qua làn IN cổng.
+LPR_VEHICLE_CLASSES = frozenset({"car", "truck", "container", "motorbike"})
+
+# REQ-003: xe quen mức 1 (xanh), xe lạ mức 2 (vàng), danh sách đen mức 3 (đỏ).
+VEHICLE_TAG_SEVERITY = {"known": 1, "unknown": 2, "blacklisted": 3}
+
+# Cooldown LPR tách khỏi event_manager của luồng vi phạm zone: hai luồng có đơn vị
+# chống trùng khác nhau (biển số vs cặp zone+lớp đối tượng) và cửa sổ khác nhau.
+lpr_event_manager = EventManager(
+    cooldown_seconds=settings.LPR_COOLDOWN_SECONDS,
+    clips_dir=settings.CLIPS_DIR,
+)
 _FIRST_FRAME_TIMEOUT_SECONDS = 5.0
+# Số chunk MJPEG tối đa mỗi kết nối; <= 0 nghĩa là stream vô hạn (mặc định production,
+# uvicorn tự hủy generator khi client ngắt). Đây là điểm neo để test đặt giới hạn hữu hạn:
+# TestClient của Starlette gom toàn bộ body trước khi trả response, nên một generator
+# không có điều kiện dừng sẽ treo vĩnh viễn.
+_MAX_STREAM_FRAMES = 0
+# Lớp bị ẩn khỏi bbox vẽ trên MJPEG. Đây thuần tuý là quyết định hiển thị: bãi cảng
+# xếp hàng chục container tĩnh nên khung xanh phủ kín màn hình và che mất những đối
+# tượng thực sự cần theo dõi (xe nâng, xe cẩu, người).
+#
+# Ẩn ở đây chứ không lọc khỏi snapshot.detections: luật zone, cảnh báo vi phạm, chip
+# metadata và event ghi vào CSDL đều đọc từ danh sách đó và phải giữ nguyên container.
+_MJPEG_HIDDEN_BBOX_CLASSES = {"container"}
 _event_telegram_status_cache: dict[str, dict[str, Any]] = {}
+
+def _resolve_video_path_or_503(camera_id: str) -> str:
+    """Không có nguồn video là lỗi cấu hình/hạ tầng, không phải crash của server.
+
+    Trả 503 kèm thông điệp chi tiết để thẻ <img> MJPEG ở frontend hiển thị được
+    trạng thái "mất luồng" thay vì nhận 500 unhandled rồi ngắt pipeline metadata.
+    """
+    try:
+        return resolve_video_path(camera_id)
+    except VideoSourceUnavailableError as exc:
+        logger.error("Video source unavailable for camera %s: %s", camera_id, exc)
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"Không tìm thấy nguồn video cho camera '{camera_id}'. "
+                f"Cấu hình VIDEO_PATH hoặc VIDEO_{camera_id.replace('-', '_').upper()}_PATH, "
+                f"hoặc đặt file video mẫu vào data/video/{camera_id}.mp4. Chi tiết: {exc}"
+            ),
+        ) from exc
+    except RuntimeError as exc:
+        logger.error("Video source resolution failed for camera %s: %s", camera_id, exc)
+        raise HTTPException(
+            status_code=503,
+            detail=f"Không thể xác định nguồn video cho camera '{camera_id}': {exc}",
+        ) from exc
+
 
 class EventResponse(BaseModel):
     id: str
@@ -214,6 +275,191 @@ def persist_area_metadata_violations(
             persisted.append(event)
     return persisted
 
+
+def _is_inbound_lane(zone_name: str | None) -> bool:
+    """Zone làn vào của cổng ('Làn IN 1', 'Làn IN 2', và các làn IN thêm sau này)."""
+    return bool(zone_name) and zone_name.strip().lower().startswith("làn in")
+
+
+def _resolve_vehicle_tag(db: Session, plate_text: str, vehicle_type: str) -> tuple[str, int]:
+    """Tra biển số trong bảng vehicles và trả về (tag_label, severity_level).
+
+    Biển số chưa từng thấy được ghi mới với tag 'unknown' để nó xuất hiện ngay trong
+    danh sách phương tiện; nhân viên an ninh gắn lại 'known'/'blacklisted' sau.
+    """
+    repo = VehicleRepository(db)
+    existing = repo.get_by_plate(plate_text)
+    tag_label = existing.tag_label if existing is not None else "unknown"
+
+    repo.upsert(
+        VehicleModel(
+            id=f"veh-{uuid.uuid4().hex[:8]}",
+            license_plate=plate_text,
+            vehicle_type=vehicle_type,
+            # Giữ nguyên tag hiện có: upsert() ghi đè tag_label, truyền tag đã tra được
+            # thì một lượt xe đi qua cổng không hạ 'blacklisted' về 'unknown'.
+            tag_label=tag_label,
+        )
+    )
+    return tag_label, VEHICLE_TAG_SEVERITY.get(tag_label, 2)
+
+
+def _update_gate_kpi(db: Session, *, recognized: bool, confidence: float) -> None:
+    """Cộng dồn 4 thẻ KPI cổng: lượt xe, đọc được, không đọc được, độ tin cậy TB."""
+    repo = KpiRepository(db)
+    kpi = repo.get_kpi()
+    total = kpi.gate_vehicles_total if kpi else 0
+    success = kpi.gate_lpr_success if kpi else 0
+    failed = kpi.gate_lpr_failed if kpi else 0
+    average_confidence = kpi.gate_avg_confidence if kpi else 0.0
+
+    if recognized:
+        # Trung bình cộng dồn, không lưu lịch sử confidence: tránh phải quét lại
+        # toàn bộ bảng events mỗi lượt xe chỉ để tính một con số hiển thị.
+        # Quy về thang phần trăm 0-100 cho khớp seed của kpi_realtime_cache
+        # (gate_avg_confidence = 94.5), khác thang 0-1 của Event.confidence.
+        average_confidence = (
+            (average_confidence * success) + confidence * 100.0
+        ) / (success + 1)
+        success += 1
+    else:
+        failed += 1
+
+    repo.update_kpi(
+        gate_vehicles_total=total + 1,
+        gate_lpr_success=success,
+        gate_lpr_failed=failed,
+        gate_avg_confidence=round(average_confidence, 4),
+    )
+
+
+def _persist_lpr_passage_event(
+    db: Session,
+    *,
+    camera_id: str,
+    detection: dict[str, Any],
+    plate_text: str,
+    plate_confidence: float,
+    severity_level: int,
+    timestamp: datetime | None = None,
+    source_video_path: str | None = None,
+    source_timestamp_seconds: float | None = None,
+) -> EventModel:
+    if timestamp is None:
+        event_timestamp = datetime.now(ICT_TZ)
+    elif timestamp.tzinfo is None:
+        event_timestamp = timestamp.replace(tzinfo=timezone.utc).astimezone(ICT_TZ)
+    else:
+        event_timestamp = timestamp.astimezone(ICT_TZ)
+
+    video_clip_url = None
+    if source_video_path:
+        try:
+            video_clip_url = event_manager.slice_10s_ring_buffer_clip(
+                camera_id,
+                timestamp=event_timestamp.timestamp(),
+                source_video_path=source_video_path,
+                source_timestamp_seconds=source_timestamp_seconds,
+            )
+        except Exception as exc:
+            # Không cắt được clip chứng cứ vẫn phải ghi được lượt xe: mất một video
+            # còn hơn mất cả bản ghi biển số.
+            logger.warning("Không cắt được clip chứng cứ LPR cho %s: %s", plate_text, exc)
+
+    cls_name = detection.get("object_class", "car")
+    event = EventModel(
+        id=f"evt-lpr-{uuid.uuid4().hex[:8]}",
+        timestamp=event_timestamp,
+        camera_id=camera_id,
+        zone_id=detection.get("zone_id"),
+        lane_id=detection.get("zone_name"),
+        event_type="LPR_PASSAGE",
+        severity_level=severity_level,
+        license_plate=plate_text,
+        object_class=detection.get("vietnamese_name")
+        or OBJECT_VIETNAMESE_NAMES.get(cls_name, cls_name),
+        confidence=plate_confidence,
+        bbox=detection.get("bbox"),
+        crop_image_url=f"/media/crops/crop_{plate_text.replace('.', '_')}.jpg",
+        video_clip_url=video_clip_url,
+    )
+    return EventRepository(db).create(event)
+
+
+def persist_gate_lpr_events(
+    db: Session,
+    *,
+    camera_id: str,
+    detections: list[dict[str, Any]],
+    frame_matrix: Any,
+    source_video_path: str | None = None,
+    source_timestamp_seconds: float | None = None,
+) -> list[EventModel]:
+    """Đọc biển số của xe trong làn IN cổng và ghi sự kiện LPR_PASSAGE (REQ-001)."""
+    if camera_id != GATE_CAMERA_ID or frame_matrix is None:
+        return []
+
+    trigger_boxes = settings.gate_lpr_trigger_boxes()
+    persisted: list[EventModel] = []
+    for detection in detections:
+        cls_name = str(detection.get("object_class") or "")
+        if cls_name not in LPR_VEHICLE_CLASSES:
+            continue
+        if not _is_inbound_lane(detection.get("zone_name")):
+            continue
+
+        # Ô ngắm sẵn của làn được ưu tiên; làn chưa đo được toạ độ thì lùi về quét cản va.
+        trigger_box = trigger_boxes.get(str(detection.get("zone_id")))
+        reading = lpr_engine.read_plate(
+            frame_matrix, detection.get("bbox"), trigger_box=trigger_box
+        )
+        plate_text = reading.plate_text
+        plate_confidence = reading.confidence
+
+        if not plate_text:
+            # Đọc hỏng vẫn là một lượt xe qua cổng, phải vào KPI "Không đọc được".
+            # Không có biển số để làm khoá chống trùng nên dùng (làn, loại xe): một
+            # chiếc xe đứng nhiều frame chỉ được đếm hỏng đúng một lần mỗi cooldown.
+            if not lpr_event_manager.is_duplicate(
+                camera_id, detection.get("zone_id"), f"LPR_UNREADABLE:{cls_name}"
+            ):
+                _update_gate_kpi(db, recognized=False, confidence=0.0)
+            continue
+
+        # Chống trùng theo biển số bất kể làn: cùng một lượt xe có thể lấn qua ranh
+        # giới hai làn IN và sinh detection ở cả hai zone trong cùng vài giây.
+        if lpr_event_manager.is_duplicate(camera_id, None, plate_text):
+            continue
+
+        if reading.source == "roster_match":
+            # Bảng events chưa có cột nguồn gốc, nên nguồn của một biển khớp roster chỉ
+            # còn dấu vết ở log và ở confidence đã bị chiết khấu. Ghi lại mảnh ký tự thật
+            # để về sau còn đối chiếu được lượt xe này dựa trên bằng chứng nào.
+            logger.info(
+                "LPR_PASSAGE %s tại %s dựng từ mảnh OCR %s (khớp roster, confidence %.3f)",
+                plate_text,
+                detection.get("zone_name"),
+                [text for text, _conf in reading.fragments],
+                plate_confidence,
+            )
+
+        _tag_label, severity_level = _resolve_vehicle_tag(db, plate_text, cls_name)
+        event = _persist_lpr_passage_event(
+            db,
+            camera_id=camera_id,
+            detection=detection,
+            plate_text=plate_text,
+            plate_confidence=plate_confidence,
+            severity_level=severity_level,
+            source_video_path=source_video_path,
+            source_timestamp_seconds=source_timestamp_seconds,
+        )
+        _update_gate_kpi(db, recognized=True, confidence=plate_confidence)
+        persisted.append(event)
+
+    return persisted
+
+
 @router.get("", response_model=list[EventResponse])
 def get_events(
     camera_id: str | None = Query(None, description="Lọc theo mã camera (GATE-01, BAI-KIEM, XUONG-AN-NINH)"),
@@ -337,6 +583,9 @@ def video_feed(
 
         # 3. Draw Bounding Boxes and Labels on Frame
         for d in detections:
+            if d.get("object_class") in _MJPEG_HIDDEN_BBOX_CLASSES:
+                continue
+
             bbox = d.get("bbox", [0, 0, 0, 0])
             x = int((bbox[0] / 100.0) * w)
             y = int((bbox[1] / 100.0) * h)
@@ -375,7 +624,8 @@ def video_feed(
             + jpeg_buf.tobytes() + b'\r\n'
         )
 
-    pipeline = get_camera_pipeline(camera_id, vision_pipeline)
+    video_path = _resolve_video_path_or_503(camera_id)
+    pipeline = get_camera_pipeline(camera_id, vision_pipeline, video_path)
     zone_state = zone_cache_service.get_or_load(db, camera_id)
     pipeline.update_zones(list(zone_state.zones), zone_state.zone_version)
 
@@ -383,7 +633,18 @@ def video_feed(
     first_snapshot = None
     while time.monotonic() < deadline:
         remaining = max(0.0, deadline - time.monotonic())
-        snapshot = pipeline.wait_for_snapshot(None, timeout=min(2.0, remaining))
+        try:
+            snapshot = pipeline.wait_for_snapshot(None, timeout=min(2.0, remaining))
+        except RuntimeError as exc:
+            # Decoder thread chết (file hỏng, codec thiếu) — báo 503 thay vì 500.
+            logger.error("Camera pipeline failed for %s: %s", camera_id, exc)
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    f"Camera pipeline của '{camera_id}' không giải mã được nguồn video "
+                    f"{video_path}: {exc}"
+                ),
+            ) from exc
         if snapshot is None:
             continue
         first_snapshot = snapshot
@@ -404,9 +665,10 @@ def video_feed(
 
     def generate_frames():
         last_frame_id = first_snapshot.frame_id
+        sent_frames = 1
         yield first_chunk
 
-        while True:
+        while _MAX_STREAM_FRAMES <= 0 or sent_frames < _MAX_STREAM_FRAMES:
             snapshot = pipeline.wait_for_snapshot(last_frame_id, timeout=2.0)
             if snapshot is None or snapshot.frame_id == last_frame_id:
                 continue
@@ -414,6 +676,7 @@ def video_feed(
             chunk = encode_mjpeg_chunk(snapshot, zone_state)
             if chunk is None:
                 continue
+            sent_frames += 1
             yield chunk
 
     return StreamingResponse(generate_frames(), media_type="multipart/x-mixed-replace; boundary=frame")
@@ -431,11 +694,17 @@ def get_live_detections(
     Sử dụng AI Vision Pipeline (YOLO Engine từ backend/app/ai/weights & Ray-Casting PIP)
     trích xuất khung hình video thực tế và đánh giá vi phạm zone lưu CSDL SQLite.
     """
-    video_path = resolve_video_path(camera_id)
+    video_path = _resolve_video_path_or_503(camera_id)
     zone_state = zone_cache_service.get_or_load(db, camera_id)
     pipeline = get_camera_pipeline(camera_id, vision_pipeline, video_path)
     pipeline.update_zones(list(zone_state.zones), zone_state.zone_version)
-    snapshot = pipeline.get_latest_snapshot()
+    try:
+        snapshot = pipeline.get_latest_snapshot()
+    except RuntimeError as exc:
+        # Metadata lane phải sống sót qua lỗi decoder: trả rỗng thay vì 500 để
+        # frontend giữ nguyên overlay zone và tự retry.
+        logger.error("Camera pipeline failed for %s: %s", camera_id, exc)
+        snapshot = None
     if snapshot is None:
         raw_detections = []
     else:
@@ -513,6 +782,29 @@ def get_live_detections(
                 "zone_name": matched_zone_name,
                 "zone_id": matched_zone_id
             })
+
+    # Camera cổng: đọc biển số ngay trên frame vừa suy luận. Chạy ở đây chứ không
+    # trong CameraFramePipeline vì luồng decode nền không có Session CSDL để tra bảng
+    # vehicles và cộng KPI, còn endpoint này thì đã có sẵn cả frame lẫn db.
+    if camera_id == GATE_CAMERA_ID:
+        # Chỉ hỏi trạng thái ở camera cổng: is_available() kéo theo việc nạp model
+        # EasyOCR, không có lý do trả giá đó khi người dùng đang xem tab giám sát bãi.
+        # Header thay vì trường trong body để giữ nguyên hợp đồng "body là mảng
+        # detection", đúng lối đã dùng cho X-Frame-Id/X-Frame-Timestamp.
+        response.headers["X-OCR-Status"] = lpr_engine.ocr_status()
+
+    if camera_id == GATE_CAMERA_ID and snapshot is not None:
+        gate_source_timestamp = video_time
+        if gate_source_timestamp is None:
+            gate_source_timestamp = snapshot.source_timestamp_seconds
+        persist_gate_lpr_events(
+            db,
+            camera_id=camera_id,
+            detections=raw_detections,
+            frame_matrix=snapshot.frame,
+            source_video_path=video_path,
+            source_timestamp_seconds=gate_source_timestamp,
+        )
 
     # Format final output & auto-persist violation events into SQLite DB
     formatted_detections = []

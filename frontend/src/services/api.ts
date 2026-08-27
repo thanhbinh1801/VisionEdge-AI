@@ -23,10 +23,14 @@ export interface LiveDetection {
   zone_name?: string;
 }
 
+/** Trạng thái OCR engine; chỉ camera cổng mới trả về, các camera khác là undefined. */
+export type OcrStatus = 'ready' | 'unavailable';
+
 export interface LiveDetectionSnapshot {
   detections: LiveDetection[];
   frameId?: string;
   frameTimestamp?: string;
+  ocrStatus?: OcrStatus;
 }
 
 interface ZoneWriteEnvelopeSuccess {
@@ -381,10 +385,37 @@ export async function fetchLiveDetections(cameraId: string = 'BAI-KIEM', confThr
   }
   const res = await fetch(url);
   if (!res.ok) throw new Error(`Dịch vụ AI không phản hồi (HTTP ${res.status})`);
+  const ocrStatus = res.headers.get('X-OCR-Status');
   return {
     detections: await res.json(),
     frameId: res.headers.get('X-Frame-Id') || undefined,
     frameTimestamp: res.headers.get('X-Frame-Timestamp') || undefined,
+    ocrStatus: ocrStatus === 'ready' || ocrStatus === 'unavailable' ? ocrStatus : undefined,
+  };
+}
+
+/** Phản hồi của `POST /assistant/query` — khớp `QueryResponse` tại backend/app/models/schemas/assistant.py. */
+export interface AssistantQueryResult {
+  answer: string;
+  sql_query?: string | null;
+  clip_url?: string | null;
+}
+
+export async function askAssistant(query: string): Promise<AssistantQueryResult> {
+  const res = await fetch(`${API_BASE_URL}/assistant/query`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ query }),
+  });
+  if (!res.ok) throw new Error(`Trợ lý không phản hồi (HTTP ${res.status})`);
+  const data = await res.json();
+  if (typeof data?.answer !== 'string') {
+    throw new Error('Phản hồi của trợ lý thiếu trường `answer`');
+  }
+  return {
+    answer: data.answer,
+    sql_query: typeof data.sql_query === 'string' ? data.sql_query : null,
+    clip_url: typeof data.clip_url === 'string' ? data.clip_url : null,
   };
 }
 

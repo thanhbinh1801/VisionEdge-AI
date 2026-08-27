@@ -3,11 +3,30 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
-from app.core.config import settings
+from backend.app.core.config import settings
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
+
+VIDEO_EXTENSIONS = (".mp4", ".mkv", ".avi", ".mov")
+
+
+class VideoSourceUnavailableError(RuntimeError):
+    """Không tìm thấy file video nào dùng được cho camera.
+
+    Kế thừa RuntimeError để các caller cũ (đang bắt RuntimeError) không đổi hành vi,
+    nhưng lớp API có thể bắt riêng và trả 503 thay vì để FastAPI trả 500.
+    """
+
+    def __init__(self, camera_id: Optional[str], attempted: list[str]):
+        self.camera_id = camera_id
+        self.attempted = attempted
+        super().__init__(
+            f"Không tìm thấy nguồn video cho camera '{camera_id or 'unknown'}'. "
+            f"VIDEO_PATH does not point to an existing file. "
+            f"Đã thử: {', '.join(attempted) if attempted else '(không có ứng viên nào)'}"
+        )
 
 
 @dataclass(frozen=True)
@@ -21,15 +40,135 @@ class ExtractedFrame:
     actual_timestamp_seconds: float
 
 
+def _absolutize(raw_path: str) -> Path:
+    """Neo đường dẫn tương đối vào gốc repo thay vì CWD (dev chạy từ backend/)."""
+    candidate = Path(raw_path).expanduser()
+    if not candidate.is_absolute():
+        candidate = PROJECT_ROOT / candidate
+    return candidate.resolve()
+
+
+def _coerce_camera_id(camera_id: Any) -> Optional[str]:
+    """Ép camera_id về str hoặc None.
+
+    Khi endpoint FastAPI được gọi trực tiếp như hàm Python thường (trong test),
+    tham số mặc định là đối tượng `Query(...)` chứ không phải str. Lấy `.default`
+    của nó thay vì để `camera_id.replace(...)` ném AttributeError.
+    """
+    if camera_id is not None and not isinstance(camera_id, str):
+        camera_id = getattr(camera_id, "default", None)
+        if not isinstance(camera_id, str):
+            camera_id = None
+    return camera_id
+
+
+def _camera_env_video_path(camera_id: Optional[str]) -> Optional[str]:
+    """Đọc override theo camera: VIDEO_<CAMERA_ID>_PATH (env hoặc settings)."""
+    camera_id = _coerce_camera_id(camera_id)
+    if not camera_id:
+        return None
+    attr = "VIDEO_" + camera_id.replace("-", "_").upper() + "_PATH"
+    return os.getenv(attr) or getattr(settings, attr, "") or None
+
+
+def _video_search_dirs() -> list[Path]:
+    """Thư mục chứa video mẫu, ưu tiên VIDEOS_DIR rồi tới layout mặc định của repo."""
+    dirs: list[Path] = []
+    videos_dir = os.getenv("VIDEOS_DIR") or getattr(settings, "VIDEOS_DIR", "")
+    if videos_dir:
+        dirs.append(_absolutize(videos_dir))
+    dirs.append(PROJECT_ROOT / "data" / "video")
+    dirs.append(PROJECT_ROOT / "data" / "videos")
+    dirs.append(PROJECT_ROOT / "backend" / "data" / "videos")
+
+    unique: list[Path] = []
+    for path in dirs:
+        if path not in unique:
+            unique.append(path)
+    return unique
+
+
+def _camera_file_stems(camera_id: str) -> list[str]:
+    normalized = camera_id.strip()
+    stems = [
+        normalized,
+        normalized.upper(),
+        normalized.lower(),
+        normalized.replace("-", "_"),
+        normalized.replace("-", "_").upper(),
+        normalized.replace("_", "-"),
+        normalized.replace("_", "-").upper(),
+    ]
+    unique: list[str] = []
+    for stem in stems:
+        if stem and stem not in unique:
+            unique.append(stem)
+    return unique
+
+
+def _scan_for_camera_video(camera_id: Optional[str], attempted: list[str]) -> Optional[str]:
+    """Tìm file video theo tên camera trong các thư mục video mẫu của repo."""
+    if not camera_id:
+        return None
+    for directory in _video_search_dirs():
+        if not directory.is_dir():
+            continue
+        for stem in _camera_file_stems(camera_id):
+            for ext in VIDEO_EXTENSIONS:
+                candidate = directory / f"{stem}{ext}"
+                attempted.append(str(candidate))
+                if candidate.is_file():
+                    return str(candidate)
+    return None
+
+
+def _scan_for_any_sample_video(attempted: list[str]) -> Optional[str]:
+    """Fallback cuối: lấy video mẫu bất kỳ, sắp xếp theo tên để kết quả ổn định."""
+    for directory in _video_search_dirs():
+        if not directory.is_dir():
+            continue
+        attempted.append(f"{directory}/*{{{','.join(VIDEO_EXTENSIONS)}}}")
+        candidates = sorted(
+            entry
+            for entry in directory.iterdir()
+            if entry.is_file() and entry.suffix.lower() in VIDEO_EXTENSIONS
+        )
+        if candidates:
+            return str(candidates[0].resolve())
+    return None
+
+
 def resolve_video_path(camera_id: Optional[str] = None) -> str:
-    env_video_path = os.getenv("VIDEO_PATH") or settings.VIDEO_PATH
-    if env_video_path:
-        candidate = Path(env_video_path).expanduser()
-        resolved = candidate if candidate.is_absolute() else (PROJECT_ROOT / candidate)
-        resolved = resolved.resolve()
-        if os.path.exists(resolved):
+    """Xác định file video nguồn cho camera.
+
+    Thứ tự ưu tiên:
+    1. Override theo camera: `VIDEO_<CAMERA_ID>_PATH`.
+    2. `VIDEO_PATH` dùng chung.
+    3. Quét file trùng tên camera trong các thư mục video mẫu của repo.
+    4. Video mẫu bất kỳ trong các thư mục đó.
+
+    Hết cả 4 bước mới ném `VideoSourceUnavailableError` để caller trả 503 thay vì 500.
+    """
+    camera_id = _coerce_camera_id(camera_id)
+    attempted: list[str] = []
+
+    for raw_path in (_camera_env_video_path(camera_id), os.getenv("VIDEO_PATH") or settings.VIDEO_PATH):
+        if not raw_path:
+            continue
+        resolved = _absolutize(raw_path)
+        attempted.append(str(resolved))
+        if resolved.is_file():
             return str(resolved)
-    raise RuntimeError(f"VIDEO_PATH does not point to an existing file: {env_video_path}")
+
+    matched = _scan_for_camera_video(camera_id, attempted)
+    if matched:
+        return matched
+
+    fallback = _scan_for_any_sample_video(attempted)
+    if fallback:
+        return fallback
+
+    raise VideoSourceUnavailableError(camera_id, attempted)
 
 
 def extract_jpeg_frame(

@@ -13,7 +13,7 @@ import {
   Tooltip,
 } from 'recharts';
 import { useApp } from '../context/AppContext';
-import { fetchZones, fetchLatestEvents, fetchLiveDetections, LiveDetection } from '../services/api';
+import { fetchZones, fetchLatestEvents, fetchLiveDetections, LiveDetection, OcrStatus } from '../services/api';
 import { ZoneConfig, GateEvent } from '../types';
 
 const CAMERA_ID = 'GATE-01';
@@ -23,19 +23,9 @@ const POLL_INTERVAL_MS = 3000;
 // suy luận YOLO mất vài trăm ms, dùng interval ngắn sẽ chồng request. Nghỉ ngắn giữa
 // hai lần gọi để bbox bám sát video, vì khoảng nghỉ chính là độ trễ tối đa của overlay.
 const DETECTION_GAP_MS = 700;
+const DETECTION_CONF_THRESHOLD = 0.35;
 const STALE_AFTER_MS = 12000;
 const NARROW_BREAKPOINT = 980;
-
-const CANONICAL_8_TYPES = [
-  { key: 'container', label: 'Container' },
-  { key: 'truck', label: 'Xe tải' },
-  { key: 'forklift', label: 'Xe nâng' },
-  { key: 'crane', label: 'Xe cẩu' },
-  { key: 'car', label: 'Xe con' },
-  { key: 'motorbike', label: 'Xe máy' },
-  { key: 'bicycle', label: 'Xe đạp' },
-  { key: 'person', label: 'Người' },
-];
 
 /** Một dòng biển số đã nhận diện, kèm mốc thời gian gốc để dựng biểu đồ. */
 interface GateEventRow extends GateEvent {
@@ -119,7 +109,7 @@ const cardStyle: React.CSSProperties = {
 const chartHeight = 44;
 
 export const GateDashboard: React.FC = () => {
-  const { clock, zonesByCam, updateZone, toggleZoneType, setTab, setSubTab } = useApp();
+  const { clock, zonesByCam, updateZone, setTab, setSubTab } = useApp();
 
   const [zones, setZones] = useState<ZoneConfig[]>([]);
   const [activeZoneId, setActiveZoneId] = useState<string | null>(null);
@@ -129,6 +119,12 @@ export const GateDashboard: React.FC = () => {
   const [lastSyncAt, setLastSyncAt] = useState<number | null>(null);
   const [isNarrow, setIsNarrow] = useState<boolean>(false);
   const [videoFailed, setVideoFailed] = useState<boolean>(false);
+  const [detectionError, setDetectionError] = useState<string | null>(null);
+  // Trạng thái OCR engine do backend báo về. Trước đây EasyOCR thiếu package thì LPR
+  // chết câm lặng và UI chỉ hiện "Chưa ghi nhận biển số nào", không phân biệt được
+  // "không có xe" với "engine hỏng".
+  const [ocrStatus, setOcrStatus] = useState<OcrStatus | undefined>(undefined);
+  const [eventsError, setEventsError] = useState<string | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
 
   // Inline Zone Name Editing State
@@ -177,11 +173,21 @@ export const GateDashboard: React.FC = () => {
       const video = videoRef.current;
       // Đọc mốc thời gian ngay trước khi gọi để sai lệch chỉ còn bằng độ trễ suy luận.
       const at = video && !video.paused ? video.currentTime : undefined;
-      const liveResult = await fetchLiveDetections(CAMERA_ID, at);
-      if (cancelled) return;
-      setDetections(liveResult.detections);
-      if (liveResult.detections.length > 0) setLastSyncAt(Date.now());
-      timer = window.setTimeout(tick, DETECTION_GAP_MS);
+      try {
+        const liveResult = await fetchLiveDetections(CAMERA_ID, DETECTION_CONF_THRESHOLD, at);
+        if (cancelled) return;
+        setDetections(liveResult.detections);
+        setOcrStatus(liveResult.ocrStatus);
+        setDetectionError(null);
+        if (liveResult.detections.length > 0) setLastSyncAt(Date.now());
+      } catch (err) {
+        if (cancelled) return;
+        // Giữ bbox cuối cùng thay vì xoá trắng: một nhịp lỗi không có nghĩa là khung hình trống.
+        setDetectionError(err instanceof Error ? err.message : 'Dịch vụ AI không phản hồi');
+      } finally {
+        // Luôn hẹn lại lượt kế tiếp, kể cả khi lượt này lỗi, để vòng lặp tự phục hồi.
+        if (!cancelled) timer = window.setTimeout(tick, DETECTION_GAP_MS);
+      }
     };
 
     tick();
@@ -196,20 +202,29 @@ export const GateDashboard: React.FC = () => {
     let cancelled = false;
 
     const loadBackendData = async () => {
-      const rawEvents = await fetchLatestEvents(CAMERA_ID, 20);
-      if (cancelled) return;
+      try {
+        const rawEvents = await fetchLatestEvents(CAMERA_ID, 20);
+        if (cancelled) return;
 
-      // Chỉ lấy sự kiện LPR: endpoint /events?camera_id=GATE-01 còn trả cả ZONE_VIOLATION
-      // (license_plate = null) — nếu không lọc, người đi vào zone sẽ bị đếm nhầm thành
-      // "biển số không đọc được" trong danh sách và cả 2 thẻ KPI.
-      const mapped = (rawEvents || [])
-        .filter((e: any) => e.event_type === 'LPR' || Boolean(e.license_plate))
-        .map(mapEventRow)
-        .sort((a, b) => b.ts - a.ts);
-      setEvents(mapped);
-      setIsLoading(false);
-      if (rawEvents && rawEvents.length > 0) {
-        setLastSyncAt(Date.now());
+        // Chỉ lấy sự kiện LPR: endpoint /events?camera_id=GATE-01 còn trả cả ZONE_VIOLATION
+        // (license_plate = null) — nếu không lọc, người đi vào zone sẽ bị đếm nhầm thành
+        // "biển số không đọc được" trong danh sách và cả 2 thẻ KPI.
+        const mapped = (rawEvents || [])
+          .filter((e: any) => e.event_type === 'LPR' || Boolean(e.license_plate))
+          .map(mapEventRow)
+          .sort((a, b) => b.ts - a.ts);
+        setEvents(mapped);
+        setEventsError(null);
+        if (rawEvents && rawEvents.length > 0) {
+          setLastSyncAt(Date.now());
+        }
+      } catch (err) {
+        if (cancelled) return;
+        // Giữ danh sách đã tải trước đó và báo lỗi ra UI, thay vì im lặng coi như rỗng.
+        setEventsError(err instanceof Error ? err.message : 'Không thể tải sự kiện');
+      } finally {
+        // Thoát trạng thái tải kể cả khi lỗi, nếu không UI kẹt ở "Đang tải…" vĩnh viễn.
+        if (!cancelled) setIsLoading(false);
       }
     };
 
@@ -220,33 +235,6 @@ export const GateDashboard: React.FC = () => {
       clearInterval(interval);
     };
   }, []);
-
-  const activeZone = zones.find((z) => z.id === activeZoneId) || zones[0];
-
-  // Dynamic Vehicle Rules Pills derived from Active GATE-01 Zone
-  const typeRules = useMemo(
-    () =>
-      CANONICAL_8_TYPES.map((t) => {
-        if (!activeZone) return { key: t.key, name: t.label, label: `✓ ${t.label}`, ok: true };
-        const forbiddenList = activeZone.forbidden_classes || [];
-        const allowedList = activeZone.allowed_classes || [];
-
-        let isAllowed = true;
-        if (forbiddenList.includes(t.key)) {
-          isAllowed = false;
-        } else if (allowedList.length > 0 && !allowedList.includes(t.key)) {
-          isAllowed = false;
-        }
-
-        return {
-          key: t.key,
-          name: t.label,
-          label: `${isAllowed ? '✓' : '✕'} ${t.label}`,
-          ok: isAllowed,
-        };
-      }),
-    [activeZone]
-  );
 
   const handleSaveZoneName = useCallback(
     (zoneId: string) => {
@@ -276,7 +264,8 @@ export const GateDashboard: React.FC = () => {
   const trend = useMemo(() => buildTrendSeries(events), [events]);
   const hasTrend = trend.length > 0;
   const isStale = lastSyncAt !== null && Date.now() - lastSyncAt > STALE_AFTER_MS;
-  const isEmpty = !isLoading && events.length === 0;
+  // Lỗi tải và "chưa có dữ liệu" là hai trạng thái khác nhau; không gộp làm một.
+  const isEmpty = !isLoading && !eventsError && events.length === 0;
 
   const kpis = [
     {
@@ -486,6 +475,21 @@ export const GateDashboard: React.FC = () => {
               <span style={{ fontSize: '12px', color: 'var(--ink3)' }}>
                 {CAMERA_ID} · Cổng vào · {clock}
               </span>
+              {detectionError && (
+                <span
+                  role="alert"
+                  style={{
+                    fontSize: '11px',
+                    fontWeight: 600,
+                    color: 'var(--p1)',
+                    border: '1px solid rgba(255,159,10,.4)',
+                    borderRadius: '6px',
+                    padding: '2px 8px',
+                  }}
+                >
+                  AI gián đoạn · đang thử lại
+                </span>
+              )}
             </div>
 
             {/* Zone Selector Buttons with Inline Double-Click Editing */}
@@ -789,52 +793,15 @@ export const GateDashboard: React.FC = () => {
             </div>
           </div>
 
-          {/* Under-stream Interactive Vehicle Type Rule Pills */}
-          <div style={{ marginTop: '12px' }}>
-            <div style={{ fontSize: '11px', color: 'var(--ink3)', marginBottom: '6px', fontWeight: 600 }} id="gate-rules-label">
-              Chọn loại xe được phép vào zone ({activeZone ? activeZone.name : CAMERA_ID}) (bấm để đổi ✓ được phép / ✕ cấm):
+          {/* Luật cấm/cho phép loại xe đã gỡ khỏi màn Cổng: đó là logic vi phạm zone của
+              REQ-002 (giám sát khu vực) bị bê nhầm sang đây. REQ-001 chỉ dùng polygon làn
+              IN để kích hoạt LPR và gán lane_id, không có khái niệm loại xe bị cấm ở cổng.
+              Cấu hình luật zone vẫn nằm nguyên ở tab Giám sát khu vực. */}
+          {zones.length === 0 && !isLoading && (
+            <div style={{ marginTop: '12px', fontSize: '11px', color: 'var(--ink3)' }}>
+              Chưa cấu hình zone nào cho {CAMERA_ID}. Bấm “Vẽ / Cấu hình Zone” để tạo làn IN đầu tiên.
             </div>
-            <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }} role="group" aria-labelledby="gate-rules-label">
-              {typeRules.map((t) => {
-                const fg = t.ok ? 'var(--ok)' : 'var(--p0)';
-                const bg = t.ok ? 'var(--okq)' : 'var(--p0q)';
-                const border = t.ok ? 'var(--ok)' : 'rgba(255,69,58,.4)';
-                return (
-                  <button
-                    key={t.key}
-                    onClick={() => activeZone && toggleZoneType(CAMERA_ID, activeZone.id, t.key)}
-                    disabled={!activeZone}
-                    aria-pressed={t.ok}
-                    aria-label={`${t.name}: ${t.ok ? 'được phép' : 'bị cấm'}`}
-                    title="Bấm để bật/tắt quyền truy cập loại phương tiện cho zone này (Lưu DB)"
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '5px',
-                      fontSize: '11px',
-                      fontWeight: 600,
-                      padding: '4px 11px',
-                      borderRadius: '20px',
-                      border: `1px solid ${border}`,
-                      background: bg,
-                      color: fg,
-                      cursor: activeZone ? 'pointer' : 'not-allowed',
-                      opacity: activeZone ? 1 : 0.55,
-                      fontFamily: 'inherit',
-                      transition: 'all 0.2s ease',
-                    }}
-                  >
-                    {t.label}
-                  </button>
-                );
-              })}
-            </div>
-            {zones.length === 0 && !isLoading && (
-              <div style={{ marginTop: '8px', fontSize: '11px', color: 'var(--ink3)' }}>
-                Chưa cấu hình zone nào cho {CAMERA_ID}. Bấm “Vẽ / Cấu hình Zone” để tạo zone đầu tiên.
-              </div>
-            )}
-          </div>
+          )}
         </div>
 
         {/* Right Column: Recognized License Plates List */}
@@ -871,6 +838,49 @@ export const GateDashboard: React.FC = () => {
             {isLoading && (
               <div style={{ padding: '18px 15px', fontSize: '12px', color: 'var(--ink3)' }}>
                 Đang tải dữ liệu nhận diện từ {CAMERA_ID}…
+              </div>
+            )}
+
+            {ocrStatus === 'unavailable' && (
+              <div
+                role="alert"
+                style={{
+                  padding: '14px 15px',
+                  fontSize: '12px',
+                  lineHeight: 1.6,
+                  color: 'var(--p1)',
+                  borderBottom: '1px solid var(--line)',
+                  background: 'var(--p0q)',
+                }}
+              >
+                Bộ đọc biển số (OCR) không khởi tạo được.
+                <br />
+                <span style={{ color: 'var(--ink3)' }}>
+                  Danh sách bên dưới sẽ không có biển số mới. Cài đặt gói <code>easyocr</code> ở
+                  backend rồi khởi động lại dịch vụ.
+                </span>
+              </div>
+            )}
+
+            {eventsError && (
+              <div
+                role="alert"
+                style={{
+                  padding: '14px 15px',
+                  fontSize: '12px',
+                  lineHeight: 1.6,
+                  color: 'var(--p1)',
+                  borderBottom: '1px solid var(--line)',
+                  background: 'var(--p0q)',
+                }}
+              >
+                Không tải được danh sách biển số: {eventsError}
+                <br />
+                <span style={{ color: 'var(--ink3)' }}>
+                  {events.length > 0
+                    ? 'Đang hiển thị dữ liệu của lần đồng bộ gần nhất.'
+                    : 'Kiểm tra backend đang chạy ở cổng 8000.'}
+                </span>
               </div>
             )}
 

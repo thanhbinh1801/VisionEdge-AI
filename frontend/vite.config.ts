@@ -16,6 +16,8 @@ export default defineConfig({
     proxy: {
       // Video demo & ảnh prototype được backend FastAPI mount tại cổng 8000
       '/videos': { target: 'http://localhost:8000', changeOrigin: true },
+      // Clip 10s bằng chứng và ảnh crop mà backend trả về dưới dạng /media/...
+      '/media': { target: 'http://localhost:8000', changeOrigin: true },
       '/api': { target: 'http://localhost:8000', changeOrigin: true, ws: true },
     },
   },

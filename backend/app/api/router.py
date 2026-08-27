@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from app.api.v1 import alerts, assistant, dataset, events, vehicles, websocket, zones
+from backend.app.api.v1 import alerts, assistant, dataset, events, vehicles, websocket, zones
 
 api_router = APIRouter()
 websocket_router = APIRouter()
