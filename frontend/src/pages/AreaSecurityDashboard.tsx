@@ -6,11 +6,11 @@ import {
   fetchZonesStrict,
   getVideoFeedUrl,
 } from '../services/api';
-import { AreaEvent, AreaFrameMetadataEvent, AreaMetadataObject, ZoneConfig } from '../types';
+import { AreaEvent, AreaFrameMetadataEvent, ZoneConfig } from '../types';
 
 const CANONICAL_8_TYPES = [
-  // "Container" chứ không phải "Xe container": lớp này bao cả xe chở container lẫn
-  // thùng container xếp tĩnh trong bãi. Khớp với nhãn ở GateDashboard và backend.
+  // Label legacy "Container" đại diện cho xe container trong rule vận hành;
+  // thùng container tĩnh đi theo class riêng shipping_container.
   { key: 'container', label: 'Container' },
   { key: 'truck', label: 'Xe tải' },
   { key: 'forklift', label: 'Xe nâng' },
@@ -21,12 +21,27 @@ const CANONICAL_8_TYPES = [
   { key: 'person', label: 'Người' },
 ];
 
+const RULE_CLASS_ALIASES: Record<string, string[]> = {
+  container: ['container', 'Container', 'Xe container', 'container_truck'],
+  truck: ['truck', 'Xe tải'],
+  forklift: ['forklift', 'Xe nâng'],
+  crane: ['crane', 'Xe cẩu'],
+  car: ['car', 'Xe con'],
+  motorbike: ['motorbike', 'Xe máy'],
+  bicycle: ['bicycle', 'Xe đạp'],
+  person: ['person', 'Người'],
+};
+
+function ruleClassMatches(ruleClasses: string[] = [], key: string): boolean {
+  const aliases = RULE_CLASS_ALIASES[key] || [key];
+  return ruleClasses.some((item) => aliases.includes(item) || aliases.includes(item.toLowerCase()));
+}
+
 export const AreaSecurityDashboard: React.FC = () => {
   const { clock, zonesByCam, updateZone } = useApp();
   const activeCam = 'BAI-KIEM';
   const [zones, setZones] = useState<ZoneConfig[]>([]);
   const [activeZoneId, setActiveZoneId] = useState<string | null>(null);
-  const [metadataObjects, setMetadataObjects] = useState<AreaMetadataObject[]>([]);
   const [events, setEvents] = useState<AreaEvent[]>([]);
   const [streamStatus, setStreamStatus] = useState<'loading' | 'live' | 'error'>('loading');
   const [metadataStatus, setMetadataStatus] = useState<'connecting' | 'online' | 'degraded' | 'offline'>('connecting');
@@ -37,6 +52,8 @@ export const AreaSecurityDashboard: React.FC = () => {
   const [metadataClock, setMetadataClock] = useState<string | null>(null);
   const [pipelineLatencyMs, setPipelineLatencyMs] = useState<number | null>(null);
   const [zoneVersion, setZoneVersion] = useState<number | null>(null);
+  const [debugConfThreshold, setDebugConfThreshold] = useState(0.35);
+  const [showStaticContainers, setShowStaticContainers] = useState(false);
   const [areaKpis, setAreaKpis] = useState([
     { label: 'Đối tượng trong khu', value: '0', color: 'var(--ink)' },
     { label: 'Vi phạm loại xe hôm nay', value: '0', color: 'var(--ink)' },
@@ -48,25 +65,26 @@ export const AreaSecurityDashboard: React.FC = () => {
   const [editingZoneId, setEditingZoneId] = useState<string | null>(null);
   const [editingNameText, setEditingNameText] = useState<string>('');
 
-  // Fetch zones on mount & camera change
+  // Fetch zones on mount & camera change. Prefer the latest backend rules so the
+  // dashboard chips match Cài đặt > Vẽ zone even when local context is stale.
   useEffect(() => {
     const camZones = zonesByCam[activeCam] || [];
-    if (camZones.length > 0) {
+    if (camZones.length > 0 && zones.length === 0) {
       setZones(camZones);
-      if (!activeZoneId || !camZones.some(z => z.id === activeZoneId)) {
-        setActiveZoneId(camZones[0].id);
-      }
-    } else {
-      setZonesError(null);
-      fetchZonesStrict(activeCam)
-        .then((res) => {
-          setZones(res);
-          setActiveZoneId(res[0]?.id ?? null);
-        })
-        .catch((error: unknown) => {
-          setZonesError(error instanceof Error ? error.message : 'Không thể tải cấu hình zone.');
-        });
     }
+    setZonesError(null);
+    fetchZonesStrict(activeCam)
+      .then((res) => {
+        setZones(res);
+        setActiveZoneId((current) => current && res.some(z => z.id === current) ? current : res[0]?.id ?? null);
+      })
+      .catch((error: unknown) => {
+        if (camZones.length > 0) {
+          setZones(camZones);
+          setActiveZoneId((current) => current && camZones.some(z => z.id === current) ? current : camZones[0].id);
+        }
+        setZonesError(error instanceof Error ? error.message : 'Không thể tải cấu hình zone.');
+      });
 
   }, [zonesByCam]);
 
@@ -74,7 +92,6 @@ export const AreaSecurityDashboard: React.FC = () => {
     if (!('event_type' in event) || event.event_type !== 'AREA_FRAME_METADATA') return;
     const metadataEvent = event as AreaFrameMetadataEvent;
     const payload = metadataEvent.payload;
-    setMetadataObjects(payload.objects);
     setMetadataStatus(payload.stream_status === 'degraded' ? 'degraded' : payload.stream_status === 'offline' ? 'offline' : 'online');
     setMetadataClock(payload.captured_at);
     setPipelineLatencyMs(payload.pipeline_latency_ms);
@@ -143,12 +160,9 @@ export const AreaSecurityDashboard: React.FC = () => {
     const forbiddenList = (activeZone as any).forbidden_classes || [];
     const allowedList = (activeZone as any).allowed_classes || [];
 
-    let isAllowed = true;
-    if (forbiddenList.includes(t.key)) {
-      isAllowed = false;
-    } else if (allowedList.length > 0 && !allowedList.includes(t.key)) {
-      isAllowed = false;
-    }
+    const isAllowed = allowedList.length > 0
+      ? ruleClassMatches(allowedList, t.key)
+      : !ruleClassMatches(forbiddenList, t.key);
 
     return {
       label: `${isAllowed ? '✓' : '✕'} ${t.label}`,
@@ -167,7 +181,11 @@ export const AreaSecurityDashboard: React.FC = () => {
   };
 
   // Compute 100% Real KPI Values from DB / Backend API responses
-  const videoSrc = `${getVideoFeedUrl(activeCam, { drawZones: false })}&attempt=${streamAttempt}`;
+  const videoSrc = `${getVideoFeedUrl(activeCam, {
+    drawZones: false,
+    confThreshold: debugConfThreshold,
+    showStaticContainers,
+  })}&attempt=${streamAttempt}`;
   const camTitle = 'Bãi Kiểm';
 
   return (
@@ -224,6 +242,59 @@ export const AreaSecurityDashboard: React.FC = () => {
               <span style={{ fontSize: '12px', color: metadataStatus === 'online' ? 'var(--ok)' : metadataStatus === 'degraded' ? 'var(--warn)' : 'var(--ink3)' }}>
                 Metadata: {metadataStatus.toUpperCase()}
               </span>
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginLeft: '12px' }}>
+              <label
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  fontSize: '11px',
+                  color: 'var(--ink3)',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                <span>Ngưỡng bbox</span>
+                <input
+                  type="range"
+                  min="0"
+                  max="1"
+                  step="0.05"
+                  value={debugConfThreshold}
+                  onChange={(event) => {
+                    setDebugConfThreshold(Number(event.target.value));
+                    setStreamStatus('loading');
+                    setStreamAttempt((attempt) => attempt + 1);
+                  }}
+                  aria-label="Ngưỡng hiển thị bbox debug"
+                  style={{ width: '86px' }}
+                />
+                <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: 'var(--ink2)' }}>
+                  {Math.round(debugConfThreshold * 100)}%
+                </span>
+              </label>
+              <label
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  fontSize: '11px',
+                  color: 'var(--ink3)',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={showStaticContainers}
+                  onChange={(event) => {
+                    setShowStaticContainers(event.target.checked);
+                    setStreamStatus('loading');
+                    setStreamAttempt((attempt) => attempt + 1);
+                  }}
+                />
+                Container tĩnh
+              </label>
             </div>
 
             {/* Zone Selector Buttons with Inline Name Editing */}
@@ -479,36 +550,6 @@ export const AreaSecurityDashboard: React.FC = () => {
             </div>
           </div>
 
-          <div style={{ marginTop: '12px', background: 'var(--panel)', border: '1px solid var(--line)', borderRadius: '12px', padding: '12px' }}>
-            <div style={{ fontSize: '11px', color: 'var(--ink3)', marginBottom: '8px', fontWeight: 600 }}>
-              Snapshot metadata đang hiển thị
-            </div>
-            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-              {metadataObjects.length === 0 ? (
-                <span style={{ fontSize: '11px', color: 'var(--ink3)' }}>Chưa có object trong frame metadata hiện tại.</span>
-              ) : (
-                metadataObjects.map((item) => {
-                  const violation = item.zone_hits.some((hit) => hit.rule_result === 'prohibited');
-                  return (
-                    <span
-                      key={`chip-${item.track_id}`}
-                      style={{
-                        fontSize: '11px',
-                        fontWeight: 600,
-                        padding: '5px 10px',
-                        borderRadius: '999px',
-                        background: violation ? 'var(--p0q)' : 'var(--okq)',
-                        color: violation ? 'var(--p0)' : 'var(--ok)',
-                        border: `1px solid ${violation ? 'var(--p0)' : 'var(--ok)'}`,
-                      }}
-                    >
-                      {`${item.display_name || item.object_class} · ${Math.round(item.confidence * 100)}%`}
-                    </span>
-                  );
-                })
-              )}
-            </div>
-          </div>
         </div>
 
         {/* Right Column: Real Area Events Feed (100% Data DB) */}

@@ -321,6 +321,18 @@ class DatasetRepository:
         self.db.refresh(source)
         return source
 
+    def delete_source(self, source_id: str) -> tuple[DatasetSource, set[str], int]:
+        source = self.get_source(source_id)
+        if not source:
+            raise DatasetError("NOT_FOUND", "Source not found.")
+        affected_label_ids = {sample.label_id for sample in source.samples}
+        deleted_sample_count = len(source.samples)
+        self.db.delete(source)
+        self.db.flush()
+        self.recompute_sample_counts(affected_label_ids)
+        self.db.commit()
+        return source, affected_label_ids, deleted_sample_count
+
     def get_samples(
         self,
         label_id: Optional[str] = None,

@@ -1,9 +1,9 @@
 ---
 artifact: OPEN-QUESTIONS.md
-version: 1.1.0
+version: 1.2.0
 owner: collect-requirements
 status: in-review
-updated_at: "2026-08-24T22:06:32+07:00"
+updated_at: "2026-08-27T19:49:34+07:00"
 ---
 
 # Danh sách Câu hỏi Mở Dự án SentriAI Mini
@@ -97,3 +97,66 @@ Product Owner xác nhận nội dung Telegram bắt buộc tối thiểu gồm t
 - Resolution status: resolved
 
 Product Owner xác nhận nếu gửi Telegram thất bại thì event và clip vẫn được lưu, UI vẫn cảnh báo, và lỗi gửi Telegram được ghi nhận để kiểm tra sau.
+
+## QUESTION-011 Tách ngưỡng bbox hiển thị và ngưỡng event trong CR-007
+
+- Type: blocking
+- Affected areas: area monitoring, video-feed, event lane
+- Owner: collect-requirements
+- Resolution status: resolved
+
+Product Owner xác nhận bbox display threshold được thấp hơn event/cảnh báo threshold; bbox có thể hiển thị để quan sát, nhưng event Mức 3 chỉ sinh khi detection qua rule ổn định hơn.
+
+## QUESTION-012 Nhóm đối tượng ưu tiên không bỏ sót trong CR-007
+
+- Type: blocking
+- Affected areas: area monitoring, detection filtering
+- Owner: collect-requirements
+- Resolution status: resolved
+
+Product Owner xác nhận nhóm ưu tiên không bỏ sót là người, xe nâng và xe tải/container-truck.
+
+## QUESTION-013 Hành vi hiển thị container/shipping_container trong CR-007
+
+- Type: blocking
+- Affected areas: video-feed, model debugging
+- Owner: collect-requirements
+- Resolution status: resolved
+
+Product Owner xác nhận container/shipping_container được ẩn bbox mặc định trên stream để giảm rối màn hình, nhưng phải có chế độ debug để bật hiển thị khi cần kiểm tra model.
+
+## QUESTION-014 Cách xác định zone violation trong CR-007
+
+- Type: blocking
+- Affected areas: area monitoring, zone evaluation
+- Owner: collect-requirements
+- Resolution status: resolved
+
+Product Owner xác nhận zone violation phải dùng rule hình học theo nhóm đối tượng: bottom-center cho người/xe máy/xe đạp; footprint overlap cho xe nâng/xe tải/container-truck/xe con/xe cẩu; overlap ratio riêng cho container/shipping_container.
+
+## QUESTION-015 Vai trò tracking trong CR-007
+
+- Type: blocking
+- Affected areas: event deduplication, metadata contract
+- Owner: collect-requirements
+- Resolution status: resolved
+
+Product Owner xác nhận CR-007 chỉ chuẩn bị `track_id` optional/future-compatible; chưa bắt buộc triển khai ByteTrack/BoT-SORT hoặc chuyển dedupe event sang track_id trong CR này.
+
+## QUESTION-016 Điều kiện ổn định trước khi tạo event/cảnh báo trong CR-007
+
+- Type: blocking
+- Affected areas: event lane, alert lane
+- Owner: collect-requirements
+- Resolution status: resolved
+
+Product Owner xác nhận event/cảnh báo Mức 3 chỉ tạo sau khi violation ổn định ngắn, ví dụ khoảng 3 frame hoặc 0.5 giây.
+
+## QUESTION-017 Regression boundary của CR-007
+
+- Type: blocking
+- Affected areas: api contract, frontend, lpr gate, video stream
+- Owner: collect-requirements
+- Resolution status: resolved
+
+Product Owner xác nhận CR-007 phải giữ nguyên hợp đồng chính hiện tại: MJPEG stream gần realtime, field `bbox` cũ vẫn là `[left, top, width, height]` theo phần trăm, `/live-detections` và WebSocket metadata vẫn tương thích frontend, và LPR/GATE-01 không đổi hành vi.

@@ -21,6 +21,13 @@ export interface LiveDetection {
   severity: number; // 1: Green, 2: Yellow, 3: Red
   zone_violation: boolean;
   zone_name?: string;
+  raw_class?: string;
+  canonical_class?: string;
+  bbox_xyxy_norm?: [number, number, number, number];
+  zone_eval_method?: 'bottom_center' | 'footprint_overlap' | 'bbox_overlap_ratio' | 'center_point_fallback' | 'none';
+  zone_overlap_ratio?: number | null;
+  detection_frame_id?: string;
+  track_id?: string | null;
 }
 
 /** Trạng thái OCR engine; chỉ camera cổng mới trả về, các camera khác là undefined. */
@@ -149,6 +156,18 @@ export async function uploadDatasetSource(file: File, name?: string): Promise<Da
   }
   const data = await readDatasetJson<{ source: DatasetSource }>(response);
   return data.source;
+}
+
+export async function deleteDatasetSource(sourceId: string): Promise<{
+  deleted_id: string;
+  deleted_sample_count: number;
+  labels: ObjectLabel[];
+}> {
+  const response = await fetch(`${API_BASE_URL}/dataset/sources/${encodeURIComponent(sourceId)}`, {
+    method: 'DELETE',
+  });
+  if (!response.ok) return readDatasetJson(response);
+  return readDatasetJson(response);
 }
 
 export async function fetchDatasetFrame(
@@ -489,11 +508,18 @@ export async function fetchZoneFrame(
 
 export function getVideoFeedUrl(
   cameraId: string,
-  options: { drawZones?: boolean } = {},
+  options: { drawZones?: boolean; confThreshold?: number; showStaticContainers?: boolean } = {},
 ): string {
   const params = new URLSearchParams({ camera_id: cameraId });
   if (options.drawZones !== undefined) {
     params.set('draw_zones', String(options.drawZones));
+  }
+  if (typeof options.confThreshold === 'number') {
+    const clampedThreshold = Math.min(1, Math.max(0, options.confThreshold));
+    params.set('conf_threshold', clampedThreshold.toFixed(2));
+  }
+  if (options.showStaticContainers !== undefined) {
+    params.set('show_static_containers', String(options.showStaticContainers));
   }
   return `${API_BASE_URL}/events/video-feed?${params.toString()}`;
 }

@@ -3,7 +3,7 @@ import os
 import threading
 import time
 from collections.abc import Generator
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import Any
 
@@ -31,6 +31,7 @@ class ProcessedFrameSnapshot:
     source_timestamp_seconds: float = 0.0
     stream_status: str = "online"
     detection_frame_id: int = 0
+    detection_source_timestamp_seconds: float = 0.0
     detection_age_ms: float = 0.0
     detection_seq: int = 0
 
@@ -64,8 +65,10 @@ class CameraFramePipeline:
         # detections that are already out of date by the time they land.
         self._pending_frame: Any | None = None
         self._pending_frame_id = 0
+        self._pending_source_timestamp_seconds = 0.0
         self._detections: tuple[dict[str, Any], ...] = ()
         self._detection_frame_id = 0
+        self._detection_source_timestamp_seconds = 0.0
         self._detection_seq = 0
         self._detection_completed_at: float | None = None
         self._inference_latency_ms = 0.0
@@ -198,6 +201,7 @@ class CameraFramePipeline:
                 with self._condition:
                     self._pending_frame = frame
                     self._pending_frame_id = frame_id
+                    self._pending_source_timestamp_seconds = source_timestamp_seconds
                     detection_age_ms = (
                         (time.monotonic() - self._detection_completed_at) * 1000.0
                         if self._detection_completed_at is not None
@@ -211,6 +215,7 @@ class CameraFramePipeline:
                         pipeline_latency_ms=self._inference_latency_ms,
                         source_timestamp_seconds=source_timestamp_seconds,
                         detection_frame_id=self._detection_frame_id,
+                        detection_source_timestamp_seconds=self._detection_source_timestamp_seconds,
                         detection_age_ms=detection_age_ms,
                         detection_seq=self._detection_seq,
                     )
@@ -238,6 +243,7 @@ class CameraFramePipeline:
                         return
                     frame = self._pending_frame
                     frame_id = self._pending_frame_id
+                    source_timestamp_seconds = self._pending_source_timestamp_seconds
                     zones = [dict(zone) for zone in self._zones]
 
                 if frame is None:
@@ -253,9 +259,20 @@ class CameraFramePipeline:
                 with self._condition:
                     self._detections = tuple(dict(item) for item in detections)
                     self._detection_frame_id = frame_id
+                    self._detection_source_timestamp_seconds = source_timestamp_seconds
                     self._detection_seq += 1
                     self._detection_completed_at = time.monotonic()
                     self._inference_latency_ms = latency_ms
+                    if self._snapshot is not None:
+                        self._snapshot = replace(
+                            self._snapshot,
+                            detections=self._detections,
+                            pipeline_latency_ms=latency_ms,
+                            detection_frame_id=frame_id,
+                            detection_source_timestamp_seconds=source_timestamp_seconds,
+                            detection_age_ms=0.0,
+                            detection_seq=self._detection_seq,
+                        )
                     self._condition.notify_all()
         except Exception as exc:
             self._fail(exc, "inference")
