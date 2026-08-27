@@ -5,7 +5,7 @@ from contextlib import suppress
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from app.services.vision_pipeline import AIVisionPipeline
+from backend.app.services.vision_pipeline import AIVisionPipeline
 from backend.app.api.v1.events import persist_area_metadata_violations
 from backend.app.services.area_metadata import build_area_metadata_event
 from backend.app.services.video_stream import get_camera_pipeline
@@ -77,16 +77,20 @@ async def websocket_events_endpoint(websocket: WebSocket):
         zone_state = zone_cache_service.get_or_load(db, camera_id)
         pipeline = get_camera_pipeline(camera_id, vision_pipeline)
         pipeline.update_zones(list(zone_state.zones), zone_state.zone_version)
-        last_frame_id = None
+        # Chờ theo nhịp inference chứ không theo nhịp decode. Sau CR-006 hai nhịp này đã
+        # tách rời: decode chạy ~25 FPS còn inference ~3 FPS, nên nếu chờ theo frame thì
+        # cùng một bộ detection sẽ được phát lại hàng chục lần mỗi giây và mỗi lần lại
+        # đi vào persist_area_metadata_violations.
+        last_detection_seq = None
         while not disconnected.is_set():
             snapshot = await asyncio.to_thread(
-                pipeline.wait_for_snapshot,
-                last_frame_id,
+                pipeline.wait_for_detection_update,
+                last_detection_seq,
                 timeout=_SNAPSHOT_WAIT_SECONDS,
             )
-            if snapshot is None:
+            if snapshot is None or snapshot.detection_seq == last_detection_seq:
                 continue
-            last_frame_id = snapshot.frame_id
+            last_detection_seq = snapshot.detection_seq
             zone_state = zone_cache_service.get_or_load(db, camera_id)
             payload = build_area_metadata_event(
                 camera_id=camera_id,

@@ -1,0 +1,33 @@
+{
+  "measured_at": "2026-08-27T11:17:21+07:00",
+  "camera_id": "BAI-KIEM",
+  "video_path": "D:\\hilab\\Project_W3+4\\VisionEdge-AI\\data\\video\\BAI-KIEM.mp4",
+  "model_weights": "sentri-yolo11s.pt",
+  "decode": {
+    "source_fps": 25.0,
+    "decode_only_fps": 226.77,
+    "frames_decoded": 2268
+  },
+  "inference": {
+    "frame_shape": "1274x720",
+    "inference_mean_ms": 300.2,
+    "inference_p95_ms": 364.4,
+    "inference_fps": 3.33,
+    "samples": 8
+  },
+  "pipeline": {
+    "publish_fps": 24.77,
+    "publish_gap_mean_ms": 40.4,
+    "publish_gap_max_ms": 44.3,
+    "detection_age_mean_ms": 145.1,
+    "detection_age_max_ms": 333.8,
+    "realtime_ratio": 0.991,
+    "frames_published": 248
+  },
+  "verdict": {
+    "video_lane_capped_by_inference": false,
+    "meets_global_ac1_fps_5": true,
+    "drifts_behind_realtime": false,
+    "target_fps": 25.0
+  }
+}
