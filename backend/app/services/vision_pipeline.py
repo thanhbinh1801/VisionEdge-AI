@@ -156,9 +156,14 @@ class AIVisionPipeline:
 
     def __init__(
         self,
-        model_name_or_path: str = "yolov8s-worldv2.pt",
+        model_name_or_path: str = None,
         confidence_threshold: float = None,
     ):
+        # Bỏ trống thì lấy DETECTION_MODEL_WEIGHTS trong .env, nhờ vậy đổi model chỉ
+        # cần sửa một dòng cấu hình thay vì sửa cả ba chỗ khởi tạo pipeline.
+        if model_name_or_path is None:
+            from backend.app.core.config import settings
+            model_name_or_path = settings.DETECTION_MODEL_WEIGHTS
         self.model_name_or_path = model_name_or_path
         self.confidence_threshold = (
             self.DEFAULT_CONFIDENCE_THRESHOLD
@@ -235,13 +240,29 @@ class AIVisionPipeline:
             except Exception as e:
                 logger.warning(f"YOLO-World load error: {e}")
 
-        # 2. Fallback to standard YOLOv8 (yolov8n.pt in weights directory)
+        # 2. Weights YOLO thường (checkpoint finetune như sentri-yolo11s.pt, hoặc
+        # yolov8n.pt). Nạp thẳng file đã yêu cầu — trước đây nhánh này bỏ qua
+        # model_source và luôn nạp yolov8n.pt, nên mọi checkpoint tự huấn luyện đều
+        # bị nuốt im lặng và hệ thống chạy bằng model COCO mặc định.
+        try:
+            from ultralytics import YOLO
+            self.model = YOLO(model_source)
+            self.model_type = "yolo"
+            logger.info(f"Loaded YOLO model from: {model_source}")
+            return
+        except Exception as e:
+            logger.warning(f"YOLO model load error ({model_source}): {e}")
+
+        # 3. Lưới an toàn cuối: yolov8n.pt để hệ thống còn chạy được khi weights chính
+        # hỏng hoặc thiếu. Lớp phát hiện sẽ nghèo hơn, log lại để không âm thầm.
         try:
             from ultralytics import YOLO
             yolov8n_path = self._resolve_model_path("yolov8n.pt")
             self.model = YOLO(yolov8n_path)
             self.model_type = "yolov8"
-            logger.info(f"Loaded YOLOv8 model from: {yolov8n_path}")
+            logger.warning(
+                f"Lùi về weights dự phòng {yolov8n_path} vì không nạp được {model_source}."
+            )
             return
         except Exception as e:
             logger.warning(f"YOLOv8 model load fallback error: {e}")
@@ -326,7 +347,10 @@ class AIVisionPipeline:
 
     @staticmethod
     def map_raw_class_to_canonical(raw_cls_name: str) -> str | None:
-        raw_cls_lower = raw_cls_name.lower().strip()
+        # Dataset tự huấn luyện đặt tên lớp kiểu snake_case ("shipping_container",
+        # "container_truck") còn các bảng ánh xạ dưới đây viết cách bằng dấu cách.
+        # Chuẩn hoá một lần ở đây thay vì nhân đôi mọi khoá trong từng bảng.
+        raw_cls_lower = raw_cls_name.lower().strip().replace("_", " ")
         cls_name = PROMPT_TO_CANONICAL.get(raw_cls_lower, COCO_TO_CANONICAL.get(raw_cls_lower, raw_cls_lower))
         if cls_name == "IGNORE":
             return None

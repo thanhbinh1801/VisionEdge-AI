@@ -2,6 +2,7 @@ import os
 import pytest
 from datetime import datetime
 from backend.database.engine import get_sqlite_engine, init_db, SessionLocal
+from backend.tests.conftest import SCHEMA_SQL_PATH
 from backend.database.models import Camera, Zone, Vehicle, Event, DatasetSource
 from backend.database.repository import (
     CameraRepository,
@@ -18,7 +19,7 @@ TEST_DB_URL = "sqlite:///./test_sentri_ai.db"
 @pytest.fixture(scope="module")
 def test_engine():
     engine = get_sqlite_engine(TEST_DB_URL)
-    init_db(schema_sql_path="docs/contracts/db/schema.sql", target_engine=engine)
+    init_db(schema_sql_path=str(SCHEMA_SQL_PATH), target_engine=engine)
     yield engine
     # Cleanup after tests
     engine.dispose()

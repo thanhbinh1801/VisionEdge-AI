@@ -1,5 +1,5 @@
 from sqlalchemy import Column, String, Integer, Boolean, Text
-from app.core.database import Base
+from backend.app.core.database import Base
 
 class Zone(Base):
     __tablename__ = "zones"

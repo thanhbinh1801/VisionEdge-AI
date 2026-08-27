@@ -58,7 +58,7 @@ class EventManager:
         
         if not os.path.exists(filepath):
             if not source_video_path:
-                from app.services.frame_extractor import resolve_video_path
+                from backend.app.services.frame_extractor import resolve_video_path
 
                 source_video_path = resolve_video_path(camera_id)
             self._write_mp4_clip(

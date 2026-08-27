@@ -12,9 +12,12 @@ if project_root not in sys.path:
 # Không gọi load_dotenv() ở đây: nó ghi vào os.environ toàn cục nên các test dựng
 # Settings(_env_file=None) sẽ đọc phải .env của máy đang chạy.
 
-from app.api.router import api_router, websocket_router
-from app.core.config import settings
-from app.core.logger import logger
+# logger phải import TRƯỚC router: import router kéo theo events.py, nơi
+# AIVisionPipeline() được dựng ngay ở cấp module và ghi log nạp weights. Đặt sau thì
+# handler chưa kịp gắn và dòng "Loaded YOLO model from: ..." biến mất khỏi console.
+from backend.app.core.logger import logger
+from backend.app.api.router import api_router, websocket_router
+from backend.app.core.config import settings
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -44,6 +47,16 @@ if os.path.exists(videos_dir):
 assets_dir = os.path.join(project_root, "Prototype", "assets")
 if os.path.exists(assets_dir):
     app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
+
+# Clip 10s bằng chứng và ảnh crop được sinh ra dưới dạng URL `/media/clips/...` và
+# `/media/crops/...` (xem event_manager.slice_10s_ring_buffer_clip). Không mount thì
+# mọi URL bằng chứng — Tab 4 lẫn Telegram CR-005 — đều trả 404.
+# Tạo sẵn thư mục: chúng chỉ xuất hiện sau lần cắt clip đầu tiên, mà StaticFiles
+# yêu cầu thư mục phải tồn tại ngay lúc mount.
+os.makedirs(settings.CLIPS_DIR, exist_ok=True)
+os.makedirs(settings.CROPS_DIR, exist_ok=True)
+app.mount("/media/clips", StaticFiles(directory=settings.CLIPS_DIR), name="media-clips")
+app.mount("/media/crops", StaticFiles(directory=settings.CROPS_DIR), name="media-crops")
 
 app.include_router(api_router, prefix=settings.API_V1_STR)
 app.include_router(websocket_router)

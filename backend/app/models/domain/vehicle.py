@@ -1,6 +1,6 @@
 from sqlalchemy import Column, String, DateTime
 from datetime import datetime
-from app.core.database import Base
+from backend.app.core.database import Base
 
 class VehicleTag(Base):
     __tablename__ = "vehicle_tags"

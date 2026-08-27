@@ -1,19 +1,38 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
+import { VideoModal } from '../components/common/VideoModal';
+
+/** Prompt chips gợi ý — bấm là gửi thẳng câu hỏi tới trợ lý. */
+const SUGGESTIONS = [
+  'Hôm nay có bao nhiêu xe lạ vào?',
+  'Có vi phạm khu vực cấm nào không?',
+  'Xe nâng hoạt động thế nào hôm nay?',
+];
 
 export const AIChatbotAssistant: React.FC = () => {
   const { chatMessages, sendChatMessage } = useApp();
   const [draft, setDraft] = useState<string>('');
+  const [activeClipUrl, setActiveClipUrl] = useState<string | null>(null);
+  const logRef = useRef<HTMLDivElement>(null);
 
-  const suggestions = [
-    'Hôm nay có bao nhiêu xe lạ vào?',
-    'Có xe máy hay xe hơi nào vào khu vực cấm không?',
-    'Xe nâng hoạt động thế nào hôm nay?',
-  ];
+  // Đang chờ backend: khoá ô nhập và các chip để không xếp chồng nhiều truy vấn.
+  const isPending = chatMessages.some((m) => m.status === 'pending');
+
+  // Cuộn xuống tin nhắn mới nhất sau mỗi lần log thay đổi.
+  useEffect(() => {
+    const node = logRef.current;
+    if (node) node.scrollTop = node.scrollHeight;
+  }, [chatMessages]);
+
+  const submit = (text: string) => {
+    if (isPending) return;
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    void sendChatMessage(trimmed);
+  };
 
   const handleSend = () => {
-    if (!draft.trim()) return;
-    sendChatMessage(draft);
+    submit(draft);
     setDraft('');
   };
 
@@ -38,6 +57,11 @@ export const AIChatbotAssistant: React.FC = () => {
     >
       {/* Chat Messages Log */}
       <div
+        ref={logRef}
+        role="log"
+        aria-live="polite"
+        aria-label="Hội thoại với trợ lý sự kiện"
+        aria-busy={isPending}
         style={{
           flex: 1,
           overflow: 'auto',
@@ -69,6 +93,9 @@ export const AIChatbotAssistant: React.FC = () => {
             );
           }
 
+          const isError = m.status === 'error';
+          const isLoading = m.status === 'pending';
+
           return (
             <div key={m.id} style={{ alignSelf: 'flex-start', maxWidth: '86%', animation: 'msgIn .25s ease' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '7px', marginBottom: '6px' }}>
@@ -83,7 +110,7 @@ export const AIChatbotAssistant: React.FC = () => {
                     justifyContent: 'center',
                   }}
                 >
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.2">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.2" aria-hidden="true">
                     <path d="M12 3v4M12 17v4M3 12h4M17 12h4" />
                   </svg>
                 </span>
@@ -91,225 +118,123 @@ export const AIChatbotAssistant: React.FC = () => {
               </div>
 
               <div
+                {...(isError ? { role: 'alert' as const } : {})}
                 style={{
                   background: 'var(--card)',
-                  border: '1px solid var(--line)',
+                  border: `1px solid ${isError ? 'rgba(255,69,58,.45)' : 'var(--line)'}`,
                   fontSize: '13.5px',
                   lineHeight: 1.6,
                   padding: '13px 16px',
                   borderRadius: '4px 15px 15px 15px',
-                  color: 'var(--ink)',
+                  color: isError ? 'var(--p0)' : 'var(--ink)',
+                  opacity: isLoading ? 0.7 : 1,
+                  fontStyle: isLoading ? 'italic' : 'normal',
                 }}
               >
                 {m.text}
               </div>
 
-              {/* Embedded 10s Video Evidence Clip Card */}
-              {m.clip && (
+              {/* Câu SQL backend đã sinh — để người dùng kiểm chứng câu trả lời. */}
+              {m.sqlQuery && (
+                <details style={{ marginTop: '8px', maxWidth: '430px' }}>
+                  <summary
+                    style={{
+                      fontSize: '11px',
+                      color: 'var(--ink3)',
+                      cursor: 'pointer',
+                      userSelect: 'none',
+                    }}
+                  >
+                    Xem truy vấn SQL
+                  </summary>
+                  <pre
+                    style={{
+                      margin: '6px 0 0',
+                      padding: '9px 11px',
+                      background: 'var(--raise)',
+                      border: '1px solid var(--line)',
+                      borderRadius: '8px',
+                      fontSize: '10.5px',
+                      lineHeight: 1.5,
+                      color: 'var(--ink2)',
+                      fontFamily: "'IBM Plex Mono', monospace",
+                      whiteSpace: 'pre-wrap',
+                      wordBreak: 'break-word',
+                    }}
+                  >
+                    {m.sqlQuery}
+                  </pre>
+                </details>
+              )}
+
+              {/* Clip 10s bằng chứng — mở bằng <VideoModal> dùng chung. */}
+              {m.clipUrl && (
                 <div
                   style={{
                     marginTop: '10px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '10px',
                     background: 'var(--panel)',
                     border: '1px solid var(--line2)',
                     borderRadius: '13px',
-                    overflow: 'hidden',
+                    padding: '10px 13px',
                     maxWidth: '430px',
                   }}
                 >
-                  <div
+                  <span
                     style={{
-                      position: 'relative',
-                      aspectRatio: '16/9',
-                      background:
-                        'radial-gradient(120% 90% at 50% 18%, #1a2129 0%, #0c0f13 60%, #07090b 100%)',
+                      fontSize: '9px',
+                      fontWeight: 700,
+                      background: 'var(--p0)',
+                      color: '#fff',
+                      padding: '2px 7px',
+                      borderRadius: '5px',
+                      flex: 'none',
                     }}
                   >
-                    <div
-                      style={{
-                        position: 'absolute',
-                        left: 0,
-                        right: 0,
-                        bottom: 0,
-                        height: '56%',
-                        background: 'linear-gradient(#0c1014,#060809)',
-                        backgroundImage:
-                          'repeating-linear-gradient(90deg, rgba(255,255,255,.05) 0 1px, transparent 1px 13%)',
-                      }}
-                    />
-
-                    <div
-                      style={{
-                        position: 'absolute',
-                        left: '28%',
-                        top: '38%',
-                        width: '44%',
-                        height: '44%',
-                        background: `linear-gradient(160deg, ${m.clip.tint || '#2a4a6b'}, #11161c)`,
-                        borderRadius: '5px',
-                      }}
-                    />
-
-                    <div
-                      style={{
-                        position: 'absolute',
-                        left: '27%',
-                        top: '37%',
-                        width: '46%',
-                        height: '46%',
-                        border: `1.5px solid ${m.clip.boxColor}`,
-                      }}
-                    >
-                      <span
-                        style={{
-                          position: 'absolute',
-                          left: '-1px',
-                          top: '-18px',
-                          background: m.clip.boxColor,
-                          color: '#06080a',
-                          fontSize: '9.5px',
-                          fontWeight: 700,
-                          padding: '1px 7px',
-                          borderRadius: '3px',
-                          whiteSpace: 'nowrap',
-                        }}
-                      >
-                        {m.clip.boxLabel}
-                      </span>
-                    </div>
-
-                    <div
-                      style={{
-                        position: 'absolute',
-                        left: '50%',
-                        top: '50%',
-                        transform: 'translate(-50%,-50%)',
-                        width: '44px',
-                        height: '44px',
-                        borderRadius: '50%',
-                        background: 'rgba(0,0,0,.55)',
-                        backdropFilter: 'blur(3px)',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        cursor: 'pointer',
-                        border: '1.5px solid rgba(255,255,255,.5)',
-                      }}
-                    >
-                      <svg width="17" height="17" viewBox="0 0 24 24" fill="#fff">
-                        <path d="M8 5v14l11-7z" />
-                      </svg>
-                    </div>
-
-                    <div
-                      style={{
-                        position: 'absolute',
-                        left: '9px',
-                        top: '8px',
-                        background: 'rgba(0,0,0,.5)',
-                        color: '#e3e7ea',
-                        fontSize: '9.5px',
-                        padding: '2px 7px',
-                        borderRadius: '5px',
-                        fontFamily: "'IBM Plex Mono', monospace",
-                      }}
-                    >
-                      {m.clip.cam}
-                    </div>
-
-                    <div
-                      style={{
-                        position: 'absolute',
-                        right: '9px',
-                        top: '8px',
-                        background: 'var(--p0)',
-                        color: '#fff',
-                        fontSize: '9px',
-                        fontWeight: 700,
-                        padding: '2px 7px',
-                        borderRadius: '5px',
-                      }}
-                    >
-                      CLIP 10s
-                    </div>
-                  </div>
-
-                  <div style={{ padding: '10px 13px' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '9px', marginBottom: '8px' }}>
-                      <span
-                        style={{
-                          fontSize: '10.5px',
-                          fontFamily: "'IBM Plex Mono', monospace",
-                          color: 'var(--ink3)',
-                        }}
-                      >
-                        {m.clip.from}
-                      </span>
-                      <div
-                        style={{
-                          flex: 1,
-                          height: '4px',
-                          borderRadius: '3px',
-                          background: 'var(--raise)',
-                          position: 'relative',
-                        }}
-                      >
-                        <div
-                          style={{
-                            position: 'absolute',
-                            left: 0,
-                            top: 0,
-                            bottom: 0,
-                            width: '32%',
-                            background: 'var(--acc)',
-                            borderRadius: '3px',
-                          }}
-                        />
-                        <div
-                          style={{
-                            position: 'absolute',
-                            left: '32%',
-                            top: '50%',
-                            width: '11px',
-                            height: '11px',
-                            borderRadius: '50%',
-                            background: '#fff',
-                            transform: 'translate(-50%,-50%)',
-                          }}
-                        />
-                      </div>
-                      <span
-                        style={{
-                          fontSize: '10.5px',
-                          fontFamily: "'IBM Plex Mono', monospace",
-                          color: 'var(--ink3)',
-                        }}
-                      >
-                        {m.clip.to}
-                      </span>
-                    </div>
-
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                      <span style={{ fontSize: '11px', color: 'var(--ink2)', flex: 1 }}>{m.clip.title}</span>
-                      <button
-                        style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '6px',
-                          fontSize: '11px',
-                          fontWeight: 600,
-                          padding: '5px 11px',
-                          borderRadius: '8px',
-                          border: '1px solid var(--line2)',
-                          background: 'transparent',
-                          color: 'var(--ink)',
-                          cursor: 'pointer',
-                          fontFamily: 'inherit',
-                        }}
-                      >
-                        Tải 10s
-                      </button>
-                    </div>
-                  </div>
+                    CLIP 10s
+                  </span>
+                  <span style={{ fontSize: '11px', color: 'var(--ink2)', flex: 1, minWidth: 0 }}>
+                    Video bằng chứng của sự kiện
+                  </span>
+                  <button
+                    onClick={() => setActiveClipUrl(m.clipUrl || null)}
+                    aria-label="Xem clip 10 giây bằng chứng"
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      fontSize: '11px',
+                      fontWeight: 600,
+                      padding: '5px 11px',
+                      borderRadius: '8px',
+                      border: '1px solid var(--line2)',
+                      background: 'transparent',
+                      color: 'var(--ink)',
+                      cursor: 'pointer',
+                      fontFamily: 'inherit',
+                      flex: 'none',
+                    }}
+                  >
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                      <path d="M8 5v14l11-7z" />
+                    </svg>
+                    Xem clip
+                  </button>
+                  <a
+                    href={m.clipUrl}
+                    download
+                    style={{
+                      fontSize: '11px',
+                      fontWeight: 600,
+                      color: 'var(--ink3)',
+                      textDecoration: 'none',
+                      flex: 'none',
+                    }}
+                  >
+                    Tải
+                  </a>
                 </div>
               )}
             </div>
@@ -319,11 +244,16 @@ export const AIChatbotAssistant: React.FC = () => {
 
       {/* Input Footer & Suggestions */}
       <div style={{ flex: 'none', paddingTop: '14px' }}>
-        <div style={{ display: 'flex', gap: '7px', flexWrap: 'wrap', marginBottom: '10px' }}>
-          {suggestions.map((s, idx) => (
+        <div
+          role="group"
+          aria-label="Câu hỏi gợi ý"
+          style={{ display: 'flex', gap: '7px', flexWrap: 'wrap', marginBottom: '10px' }}
+        >
+          {SUGGESTIONS.map((s) => (
             <button
-              key={idx}
-              onClick={() => sendChatMessage(s)}
+              key={s}
+              onClick={() => submit(s)}
+              disabled={isPending}
               style={{
                 fontSize: '11.5px',
                 fontWeight: 500,
@@ -332,7 +262,8 @@ export const AIChatbotAssistant: React.FC = () => {
                 border: '1px solid var(--line2)',
                 background: 'var(--card)',
                 color: 'var(--ink2)',
-                cursor: 'pointer',
+                cursor: isPending ? 'not-allowed' : 'pointer',
+                opacity: isPending ? 0.5 : 1,
                 fontFamily: 'inherit',
               }}
             >
@@ -356,6 +287,8 @@ export const AIChatbotAssistant: React.FC = () => {
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={handleKeyDown}
+            disabled={isPending}
+            aria-label="Câu hỏi gửi tới trợ lý sự kiện"
             placeholder="Hỏi về sự kiện đã ghi nhận… vd: hôm nay có bao nhiêu xe lạ vào?"
             style={{
               flex: 1,
@@ -370,6 +303,8 @@ export const AIChatbotAssistant: React.FC = () => {
           />
           <button
             onClick={handleSend}
+            disabled={isPending || !draft.trim()}
+            aria-label="Gửi câu hỏi"
             style={{
               width: '38px',
               height: '38px',
@@ -378,22 +313,25 @@ export const AIChatbotAssistant: React.FC = () => {
               border: 'none',
               background: 'var(--acc)',
               color: '#fff',
-              cursor: 'pointer',
+              cursor: isPending || !draft.trim() ? 'not-allowed' : 'pointer',
+              opacity: isPending || !draft.trim() ? 0.5 : 1,
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
             }}
           >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" aria-hidden="true">
               <path d="m22 2-7 20-4-9-9-4z" />
             </svg>
           </button>
         </div>
 
         <div style={{ fontSize: '10.5px', color: 'var(--ink3)', textAlign: 'center', marginTop: '8px' }}>
-          Trả lời dựa trên chỉ mục sự kiện đã lưu · luôn kèm đoạn video 10s làm bằng chứng
+          Trả lời dựa trên chỉ mục sự kiện đã lưu · kèm đoạn video 10s làm bằng chứng khi có
         </div>
       </div>
+
+      <VideoModal videoUrl={activeClipUrl} onClose={() => setActiveClipUrl(null)} />
     </div>
   );
 };

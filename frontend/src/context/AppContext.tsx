@@ -11,7 +11,7 @@ import {
   AnnotationSample,
   AIChatMessage,
 } from '../types';
-import { fetchZones, createZoneApi, updateZoneApi, deleteZoneApi, fetchVehicles, updateVehicleTagApi } from '../services/api';
+import { fetchZones, createZoneApi, updateZoneApi, deleteZoneApi, fetchVehicles, updateVehicleTagApi, askAssistant } from '../services/api';
 
 const defaultVehicles: VehicleRecord[] = [];
 const defaultGateEvents: GateEvent[] = [];
@@ -35,13 +35,6 @@ const defaultZonesByCam: Record<string, ZoneConfig[]> = {
 
 const defaultAnnSources: AnnotationSource[] = [];
 const defaultAnnSamples: AnnotationSample[] = [];
-
-const qaKnowledgeBase: any[] = [];
-
-const fallbackQA = {
-  text: 'Không có dữ liệu sự kiện nào ghi nhận trên hệ thống cơ sở dữ liệu.',
-  clip: undefined,
-};
 
 
 interface AppContextType {
@@ -72,7 +65,7 @@ interface AppContextType {
   deleteAnnSample: (sampleId: string) => void;
   saveAnnSamples: () => number;
   chatMessages: AIChatMessage[];
-  sendChatMessage: (text: string) => void;
+  sendChatMessage: (text: string) => Promise<void>;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -321,19 +314,44 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return count;
   };
 
-  const sendChatMessage = (text: string) => {
+  const sendChatMessage = async (text: string) => {
     const userText = text.trim();
     if (!userText) return;
 
-    const lower = userText.toLowerCase();
-    const hit =
-      qaKnowledgeBase.find((q: any) => q.keys.some((k: string) => lower.includes(k))) || fallbackQA;
-
+    // Một id duy nhất cho bong bóng trả lời, để thay tại chỗ khi backend phản hồi
+    // thay vì nối thêm tin nhắn mới.
+    const answerId = 'ai-' + Date.now();
     setChatMessages((prev) => [
       ...prev,
       { id: 'user-' + Date.now(), role: 'user', text: userText },
-      { id: 'ai-' + Date.now(), role: 'ai', text: hit.text, clip: hit.clip },
+      { id: answerId, role: 'ai', text: 'Đang tra cứu sự kiện…', status: 'pending' },
     ]);
+
+    try {
+      const res = await askAssistant(userText);
+      setChatMessages((prev) =>
+        prev.map((m) =>
+          m.id === answerId
+            ? {
+                ...m,
+                text: res.answer,
+                sqlQuery: res.sql_query || undefined,
+                clipUrl: res.clip_url || undefined,
+                status: undefined,
+              }
+            : m
+        )
+      );
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : 'Lỗi không xác định';
+      setChatMessages((prev) =>
+        prev.map((m) =>
+          m.id === answerId
+            ? { ...m, text: `Không lấy được câu trả lời: ${reason}`, status: 'error' }
+            : m
+        )
+      );
+    }
   };
 
   return (

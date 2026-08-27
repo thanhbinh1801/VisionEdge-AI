@@ -117,15 +117,12 @@ export interface AIChatMessage {
   id: string;
   role: 'user' | 'ai';
   text: string;
-  clip?: {
-    cam: string;
-    from: string;
-    to: string;
-    title: string;
-    boxColor: string;
-    boxLabel: string;
-    tint: string;
-  };
+  /** Câu SQL do backend sinh ra, hiển thị để người dùng kiểm chứng câu trả lời. */
+  sqlQuery?: string;
+  /** URL clip 10s bằng chứng do backend trả về; mở bằng <VideoModal>. */
+  clipUrl?: string;
+  /** `pending` khi đang chờ backend, `error` khi gọi thất bại. */
+  status?: 'pending' | 'error';
 }
 
 export interface KpiCardData {

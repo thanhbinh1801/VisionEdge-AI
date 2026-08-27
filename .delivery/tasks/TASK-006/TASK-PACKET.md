@@ -10,7 +10,7 @@ supersedes: none
 depends_on: [REQUIREMENTS.md, ARCHITECTURE.md, TASK-003, TASK-005]
 ---
 
-# Gói Task: TASK-006 - SQLite and Đãta Access Layer
+# Gói Task: TASK-006 - SQLite and Data Access Layer
 
 - Mã task: TASK-006
 - Loại task: implementation

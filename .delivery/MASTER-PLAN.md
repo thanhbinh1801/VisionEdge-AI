@@ -1,9 +1,9 @@
 ---
 artifact: MASTER-PLAN.md
-version: 2.2.0
+version: 2.3.0
 owner: plan-delivery
 status: approved
-updated_at: "2026-08-24T22:10:42+07:00"
+updated_at: "2026-08-26T15:32:21+07:00"
 depends_on: REQUIREMENTS.md, ARCHITECTURE.md, TECHNICAL-RISKS.md, ADR-001-monolithic-python-fastapi.md, ADR-002-point-in-polygon-zone-evaluation.md, ADR-003-event-cooldown-deduplication.md, ADR-004-llm-text-to-sql-with-fallback.md, ADR-005-Custom-Label-Matching-Architecture.md
 ---
 
@@ -29,11 +29,11 @@ Hệ thống được tổ chức theo 4 Phase chính:
 
 ## 2. Tổng quan Task Inventory
 
-- Tổng số task hiện có trong master plan: `27`
-- Dải task hiện dùng: `TASK-001` đến `TASK-028`, trừ `TASK-011` hiện chưa được cấp phát
+- Tổng số task hiện có trong master plan: `28`
+- Dải task hiện dùng: `TASK-001` đến `TASK-029`, trừ `TASK-011` hiện chưa được cấp phát
 - Nhóm foundation/design: `TASK-001` đến `TASK-005`, `TASK-016`
 - Nhóm feature design: `TASK-020`, `TASK-021`, `TASK-022`, `TASK-026`
-- Nhóm implementation: `TASK-006` đến `TASK-010`, `TASK-012` đến `TASK-014`, `TASK-017`, `TASK-018`, `TASK-023`, `TASK-024`, `TASK-027`
+- Nhóm implementation: `TASK-006` đến `TASK-010`, `TASK-012` đến `TASK-014`, `TASK-017`, `TASK-018`, `TASK-023`, `TASK-024`, `TASK-027`, `TASK-029`
 - Nhóm verification/diagnosis: `TASK-015`, `TASK-019`, `TASK-025`, `TASK-028`
 
 ### Danh sách task hiện hữu
@@ -67,6 +67,7 @@ Hệ thống được tổ chức theo 4 Phase chính:
 | `TASK-026` | `api-design` | Thiết kế contract event/alert evidence cho Telegram CR-005 |
 | `TASK-027` | `backend-implementation` | Backend Telegram evidence notification cho vi phạm khu vực |
 | `TASK-028` | `verify-feature` | Verification end-to-end cho CR-005 Telegram evidence |
+| `TASK-029` | `backend-implementation` | Tích hợp Google Gemini LLM Text-to-SQL cho AI Chatbot |
 
 ---
 
@@ -574,6 +575,30 @@ Hệ thống được tổ chức theo 4 Phase chính:
 - Wave: 3
 - Status: planned
 
+## Phase 6 — Gemini LLM Text-to-SQL cho AI Chatbot
+
+- Gate: integration-check
+- Integration commands: python -m pytest backend/tests/test_chatbot.py -q
+
+### Wave 1 (Gemini Integration)
+
+#### TASK-029 Tích hợp Google Gemini LLM Text-to-SQL cho AI Chatbot Assistant
+- Task type: implementation
+- Scope: feature
+- Module: llm-qa-agent
+- Linked requirements: REQ-008, CR-002
+- Capability: backend-implementation
+- Dependencies: TASK-013
+- Inputs: .delivery/ADR/ADR-004-llm-text-to-sql-with-fallback.md, .delivery/tasks/TASK-013/TASK-RESULT.md, .delivery/tasks/TASK-013/BUG-001.md, backend/app/services/qa_agent.py, backend/app/core/config.py, backend/app/models/schemas/assistant.py, backend/database/models.py
+- Outputs: backend/app/services/qa_agent.py (nhánh LLM), backend/app/core/config.py, backend/tests/test_chatbot.py, .env.example, requirements.txt, .delivery/tasks/TASK-029/TASK-RESULT.md
+- Completion gate: Gemini dịch câu hỏi tiếng Việt thành SQL và SQL đó được thực thi thật trên SQLite; chốt an toàn `_FORBIDDEN_SQL` vẫn chặn mọi câu lệnh không phải `SELECT`; khi thiếu key, thiếu thư viện, Gemini lỗi hoặc trả SQL không hợp lệ thì tự động fallback sang Rule Engine; toàn bộ test chạy được không cần khóa API thật.
+- Verification method: python -m pytest backend/tests/test_chatbot.py -q
+- Parallelizable: no
+- Parallel-safety notes: Ghi cùng `backend/app/services/qa_agent.py` và `backend/tests/test_chatbot.py` với TASK-013; chạy sau khi TASK-013 đã approved.
+- Write scope: backend/app/services/qa_agent.py, backend/app/core/config.py, backend/tests/test_chatbot.py, .env.example, requirements.txt, .delivery/tasks/TASK-029/
+- Wave: 1
+- Status: planned
+
 
 ---
 
@@ -588,10 +613,11 @@ Hệ thống được tổ chức theo 4 Phase chính:
 - REQ-005 -> TASK-002, TASK-004, TASK-005, TASK-012, TASK-015, TASK-016, TASK-017, TASK-018, TASK-019, TASK-020, TASK-021, TASK-022, TASK-023, TASK-024, TASK-025
 - REQ-006 -> TASK-003, TASK-006, TASK-012, TASK-015
 - REQ-007 -> TASK-007, TASK-012, TASK-015, TASK-020, TASK-021, TASK-022, TASK-023, TASK-024, TASK-025
-- REQ-008 -> TASK-002, TASK-013, TASK-015, TASK-026, TASK-028
+- REQ-008 -> TASK-002, TASK-013, TASK-015, TASK-026, TASK-028, TASK-029
 - REQ-009 -> TASK-002, TASK-008, TASK-014, TASK-015, TASK-016, TASK-017, TASK-018, TASK-019, TASK-026, TASK-027, TASK-028
 - CR-001 -> TASK-002, TASK-005, TASK-006, TASK-007, TASK-010, TASK-012, TASK-015
 - CR-002 -> TASK-001, TASK-002, TASK-003, TASK-004, TASK-005, TASK-006, TASK-007, TASK-008, TASK-009, TASK-010, TASK-012, TASK-013, TASK-014, TASK-015
 - CR-003 -> TASK-016, TASK-017, TASK-018, TASK-019
 - CR-004 -> TASK-020, TASK-021, TASK-022, TASK-023, TASK-024, TASK-025
 - CR-005 -> TASK-026, TASK-027, TASK-028
+- Gemini LLM (REQ-008) -> TASK-029

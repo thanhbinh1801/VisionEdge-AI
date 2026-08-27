@@ -1,6 +1,6 @@
 from fastapi import APIRouter
-from app.models.schemas.assistant import QueryRequest, QueryResponse
-from app.services.qa_agent import LLMQAAgent
+from backend.app.models.schemas.assistant import QueryRequest, QueryResponse
+from backend.app.services.qa_agent import LLMQAAgent
 
 router = APIRouter()
 agent = LLMQAAgent()

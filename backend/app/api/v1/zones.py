@@ -8,7 +8,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from app.services.frame_extractor import extract_jpeg_frame, resolve_video_path
+from backend.app.services.frame_extractor import extract_jpeg_frame, resolve_video_path
 from backend.app.services.video_stream import get_camera_pipeline
 from backend.app.services.vision_pipeline import AIVisionPipeline
 from backend.app.services.zone_cache import zone_cache_service

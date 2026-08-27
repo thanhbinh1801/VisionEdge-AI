@@ -1,3 +1,4 @@
+import json
 import os
 from pathlib import Path
 from typing import Optional
@@ -106,11 +107,70 @@ class Settings(BaseSettings):
     # 4 detection xuống còn 1.
     DETECTION_CONFIDENCE_THRESHOLD: float = 0.30
 
+    # Tên file weights (nằm trong backend/app/ai/weights/) hoặc đường dẫn tuyệt đối
+    # tới file .pt dùng cho Area Zone Monitoring.
+    #   - "sentri-yolo11s.pt": YOLOv11s finetune 50 epoch trên dataset cảng, 9 lớp
+    #     riêng (shipping_container, container_truck, ...). Mặc định.
+    #   - "yolov8s-worldv2.pt": quay lại YOLO-World open-vocabulary; tên file có chữ
+    #     "world" là điều kiện để pipeline nạp nhánh YOLOWorld + set_classes().
+    DETECTION_MODEL_WEIGHTS: str = "sentri-yolo11s.pt"
+
     EVENT_COOLDOWN_SECONDS: int = 15
+
+    # Ngưỡng tin cậy tối thiểu để chấp nhận một chuỗi biển số do EasyOCR đọc được
+    # (REQ-001). Dưới ngưỡng thì tính là "không đọc được" thay vì ghi một biển số
+    # sai vào bảng events — một biển số sai còn tệ hơn một ô trống trên dashboard.
+    #
+    # Hạ từ 0.70 xuống 0.50: camera GATE-01 nhìn xe ở góc nghiêng nên biển số bị méo
+    # phối cảnh, EasyOCR hiếm khi vượt 0.70 dù đọc đúng ký tự. Định dạng biển số Việt
+    # Nam (_PLATE_STRUCTURE_RE) vẫn là hàng rào chính chặn chuỗi rác, ngưỡng này chỉ
+    # là hàng rào thứ hai — nên nới được mà không kéo theo biển số bịa.
+    OCR_CONFIDENCE_THRESHOLD: float = 0.50
+
+    # Sàn tin cậy cứng cho một biển số được coi là "đọc thành công". Áp cho MỌI đường
+    # ra kết quả, kể cả khớp roster — không có biển số nào dưới mức này được lên UI hay
+    # vào bảng events. Trước khi có sàn này, một mảnh rác khớp roster ở 0.094 đã ghi
+    # được hai lượt xe ma vào CSDL.
+    MIN_ACCEPTED_PLATE_CONFIDENCE: float = 0.50
+
+    # Sổ đăng ký biển số của các xe xuất hiện trong footage camera cổng, phân tách bằng
+    # dấu phẩy. Dùng để hoàn thiện một lượt đọc dở dang: khi biển chỉ ~30px trên khung
+    # hình, EasyOCR thường chỉ bóc được vài ký tự chứ không đủ 7-9 ký tự để khớp định dạng.
+    #
+    # Đây KHÔNG phải cơ chế sinh biển số: match_roster_plate() bắt buộc phải có ít nhất
+    # 3 ký tự liên tiếp do OCR thực sự đọc được thì mới khớp, confidence bị chiết khấu
+    # theo tỉ lệ ký tự có bằng chứng, và vẫn phải vượt MIN_ACCEPTED_PLATE_CONFIDENCE.
+    #
+    # Để TRỐNG theo mặc định. Danh sách chỉ có giá trị khi biển số thật của footage đã
+    # được xác minh; điền biển đoán mò vào đây là cách nhanh nhất để sinh lượt xe ma.
+    GATE_PLATE_ROSTER: str = ""
+
+    # LPR Trigger Box: vùng chữ nhật cố định [x, y, w, h] tính theo phần trăm khung hình,
+    # khoá theo zone_id của làn IN. Xe vào làn thì chỉ chạy OCR đúng trong ô này thay vì
+    # quét cả cản va — dải cản va rộng ~420px chứa watermark "Cvao L1,2", vạch sơn và
+    # chữ số trên thùng container, thừa nguyên liệu để OCR sinh mảnh giả.
+    #
+    # zB (Làn IN 2) đo trực tiếp trên data/video/GATE-01.mp4: biển đuôi rơ-moóc nằm
+    # trong khoảng x 88-93%, y 79-89% suốt các frame 1200-1450 khi xe dừng ở bốt.
+    # zA (Làn IN 1) chưa có số đo: trong toàn bộ 60s footage, làn 1 chỉ có rơ-moóc đi
+    # ngang nên không có tấm biển nào để đo. Zone nào không khai báo ở đây sẽ tự động
+    # lùi về cơ chế quét cản va cũ — đặt bừa toạ độ vào một mảng nhựa đường còn tệ hơn.
+    GATE_LPR_TRIGGER_BOXES: str = '{"zB": [86.0, 76.0, 9.0, 16.0]}'
+
+    # Cửa sổ chống trùng cho sự kiện LPR_PASSAGE: một lượt xe qua cổng nằm trong khung
+    # hình nhiều giây liền, mỗi frame lại đọc ra cùng một biển số. Không có cooldown thì
+    # một chiếc xe sinh hàng chục event giống hệt nhau.
+    LPR_COOLDOWN_SECONDS: int = 12
+
     VIDEO_PATH: str = ""
     DEMO_MODE: bool = False
     TELEGRAM_BOT_TOKEN: str | None = None
     TELEGRAM_CHAT_ID: str | None = None
+
+    # Google Gemini cho nhánh LLM Text-to-SQL của trợ lý (ADR-004).
+    # Để trống thì qa_agent chạy thẳng Rule Engine, không gọi mạng.
+    GEMINI_API_KEY: str | None = None
+    GEMINI_MODEL: str = "gemini-3.1-flash-lite"
 
     @field_validator(
         "CLIPS_DIR", "CROPS_DIR", "VIDEOS_DIR", "IMAGES_DIR",
@@ -132,12 +192,21 @@ class Settings(BaseSettings):
             return value
         return prefix + resolve_from_project_root(raw_path).replace("\\", "/")
 
-    @field_validator("DETECTION_CONFIDENCE_THRESHOLD")
+    @field_validator("DETECTION_CONFIDENCE_THRESHOLD", "OCR_CONFIDENCE_THRESHOLD")
     @classmethod
-    def _check_confidence(cls, value: float) -> float:
+    def _check_confidence(cls, value: float, info) -> float:
         if not 0.0 < value < 1.0:
             raise ValueError(
-                f"DETECTION_CONFIDENCE_THRESHOLD phải nằm trong khoảng (0, 1), nhận được {value}"
+                f"{info.field_name} phải nằm trong khoảng (0, 1), nhận được {value}"
+            )
+        return value
+
+    @field_validator("LPR_COOLDOWN_SECONDS")
+    @classmethod
+    def _check_lpr_cooldown(cls, value: int) -> int:
+        if not 10 <= value <= 15:
+            raise ValueError(
+                f"LPR_COOLDOWN_SECONDS phải nằm trong khoảng 10-15 giây, nhận được {value}"
             )
         return value
 
@@ -163,6 +232,31 @@ class Settings(BaseSettings):
             self.CROPS_DIR = str(resolved_crops)
 
         return self
+
+    def gate_plate_roster(self) -> list[str]:
+        """Tách GATE_PLATE_ROSTER thành danh sách biển số, bỏ khoảng trắng và mục rỗng."""
+        return [plate.strip() for plate in self.GATE_PLATE_ROSTER.split(",") if plate.strip()]
+
+    def gate_lpr_trigger_boxes(self) -> dict[str, list[float]]:
+        """Bảng zone_id -> [x, y, w, h] phần trăm. JSON hỏng thì tắt trigger box, không sập."""
+        try:
+            raw = json.loads(self.GATE_LPR_TRIGGER_BOXES or "{}")
+        except (ValueError, TypeError):
+            return {}
+        if not isinstance(raw, dict):
+            return {}
+
+        boxes: dict[str, list[float]] = {}
+        for zone_id, box in raw.items():
+            if not isinstance(box, (list, tuple)) or len(box) != 4:
+                continue
+            try:
+                values = [float(v) for v in box]
+            except (TypeError, ValueError):
+                continue
+            if values[2] > 0 and values[3] > 0:
+                boxes[str(zone_id)] = values
+        return boxes
 
     def video_path_override(self, camera_id: str) -> Optional[str]:
         """Trả về video ghi đè cho camera nếu .env có khai báo và file tồn tại."""

@@ -14,11 +14,20 @@ from backend.app.services.video_stream import (
     CameraFramePipeline,
     LatestFrameProvider,
     VideoStreamService,
+    get_camera_pipeline,
     get_latest_frame_provider,
 )
 from backend.database.engine import SessionLocal, get_sqlite_engine, init_db
+from backend.tests.conftest import SCHEMA_SQL_PATH
 from backend.database.models import Camera, Zone
 from backend.database.models import Event as EventModel
+
+# events.py import qua namespace `app.services.*`. Dưới pytest, `app.services.frame_extractor`
+# và `backend.app.services.frame_extractor` là hai module object khác nhau, nên phải patch
+# đúng module mà API đang dùng thì monkeypatch mới có tác dụng.
+from backend.app.services import frame_extractor as api_frame_extractor
+
+VideoSourceUnavailableError = api_frame_extractor.VideoSourceUnavailableError
 
 
 @pytest.fixture(autouse=True)
@@ -66,7 +75,7 @@ def _assert_playable_mp4(path: Path, *, expected_seconds: float) -> None:
 def db_session(tmp_path):
     db_path = tmp_path / "events.db"
     engine = get_sqlite_engine(f"sqlite:///{db_path}")
-    init_db(schema_sql_path="docs/contracts/db/schema.sql", target_engine=engine)
+    init_db(schema_sql_path=str(SCHEMA_SQL_PATH), target_engine=engine)
     connection = engine.connect()
     transaction = connection.begin()
     session = SessionLocal(bind=connection)
@@ -482,6 +491,99 @@ def test_camera_pipeline_decodes_and_infers_once_for_shared_snapshot(monkeypatch
     assert streamed.detections == polled.detections
     assert vision.calls == capture.read_count
     assert capture.seek_calls == []
+
+
+def _client_with_db(db_session):
+    def override_get_db():
+        yield db_session
+
+    app.dependency_overrides[events.get_db] = override_get_db
+    return TestClient(app)
+
+
+def test_live_detections_returns_503_when_video_source_missing(db_session, monkeypatch):
+    """BUG-005: thiếu nguồn video phải là 503 có thông điệp, không phải 500 unhandled."""
+    def unavailable(camera_id=None):
+        raise VideoSourceUnavailableError(camera_id, ["/tmp/khong-co.mp4"])
+
+    monkeypatch.setattr(events, "resolve_video_path", unavailable)
+
+    client = _client_with_db(db_session)
+    try:
+        response = client.get(
+            "/api/v1/events/live-detections", params={"camera_id": "BAI-KIEM"}
+        )
+    finally:
+        app.dependency_overrides.pop(events.get_db, None)
+
+    assert response.status_code == 503
+    detail = response.json()["detail"]
+    assert "BAI-KIEM" in detail
+    assert "VIDEO_BAI_KIEM_PATH" in detail
+
+
+def test_live_detections_returns_200_with_real_video(db_session, monkeypatch, tmp_path):
+    source_video = tmp_path / "live-source.mp4"
+    _write_fixture_video(source_video, seconds=2)
+    monkeypatch.setattr(events, "resolve_video_path", lambda camera_id=None: str(source_video))
+    monkeypatch.setattr(events.vision_pipeline, "process_frame", lambda *a, **kw: [])
+
+    client = _client_with_db(db_session)
+    try:
+        response = client.get(
+            "/api/v1/events/live-detections", params={"camera_id": "LIVE-CAM"}
+        )
+    finally:
+        app.dependency_overrides.pop(events.get_db, None)
+        get_camera_pipeline("LIVE-CAM", events.vision_pipeline, str(source_video)).stop()
+
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+def test_live_detections_uses_fallback_video_when_env_unset(db_session, monkeypatch, tmp_path):
+    """VIDEO_PATH chưa set vẫn stream được nhờ quét video mẫu trong repo."""
+    videos_dir = tmp_path / "videos"
+    videos_dir.mkdir()
+    _write_fixture_video(videos_dir / "FALLBACK-CAM.mp4", seconds=2)
+
+    monkeypatch.delenv("VIDEO_PATH", raising=False)
+    monkeypatch.setattr(api_frame_extractor.settings, "VIDEO_PATH", "")
+    monkeypatch.setattr(api_frame_extractor, "_video_search_dirs", lambda: [videos_dir])
+    monkeypatch.setattr(events.vision_pipeline, "process_frame", lambda *a, **kw: [])
+
+    resolved = api_frame_extractor.resolve_video_path("FALLBACK-CAM")
+    assert Path(resolved).name == "FALLBACK-CAM.mp4"
+
+    client = _client_with_db(db_session)
+    try:
+        response = client.get(
+            "/api/v1/events/live-detections", params={"camera_id": "FALLBACK-CAM"}
+        )
+    finally:
+        app.dependency_overrides.pop(events.get_db, None)
+        get_camera_pipeline("FALLBACK-CAM", events.vision_pipeline, resolved).stop()
+
+    assert response.status_code == 200
+
+
+def test_live_detections_survives_pipeline_decode_failure(db_session, monkeypatch, tmp_path):
+    """Decoder chết không được kéo theo 500: metadata lane trả danh sách rỗng."""
+    broken_video = tmp_path / "broken-live.mp4"
+    broken_video.write_bytes(b"not-a-real-video")
+    monkeypatch.setattr(events, "resolve_video_path", lambda camera_id=None: str(broken_video))
+
+    client = _client_with_db(db_session)
+    try:
+        response = client.get(
+            "/api/v1/events/live-detections", params={"camera_id": "BROKEN-LIVE"}
+        )
+    finally:
+        app.dependency_overrides.pop(events.get_db, None)
+        get_camera_pipeline("BROKEN-LIVE", events.vision_pipeline, str(broken_video)).stop()
+
+    assert response.status_code == 200
+    assert response.json() == []
 
 
 def test_demo_mode_is_explicitly_disabled_by_default():

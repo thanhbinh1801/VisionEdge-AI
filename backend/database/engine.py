@@ -5,7 +5,7 @@ from urllib.parse import unquote, urlparse
 from typing import Generator
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker, Session, declarative_base
-from app.core.config import settings
+from backend.app.core.config import settings
 from backend.database.migrations import apply_cr004_migration
 
 Base = declarative_base()

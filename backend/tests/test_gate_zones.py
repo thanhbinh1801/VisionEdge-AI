@@ -1,6 +1,7 @@
 import os
 import pytest
 from backend.database.engine import get_sqlite_engine, init_db, SessionLocal
+from backend.tests.conftest import SCHEMA_SQL_PATH
 from backend.database.models import Zone
 from backend.database.repository import ZoneRepository
 
@@ -9,7 +10,7 @@ TEST_DB_URL = "sqlite:///./test_gate_zones.db"
 @pytest.fixture(scope="module")
 def test_engine():
     engine = get_sqlite_engine(TEST_DB_URL)
-    init_db(schema_sql_path="docs/contracts/db/schema.sql", target_engine=engine)
+    init_db(schema_sql_path=str(SCHEMA_SQL_PATH), target_engine=engine)
     yield engine
     engine.dispose()
     if os.path.exists("test_gate_zones.db"):
