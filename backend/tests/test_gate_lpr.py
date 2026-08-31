@@ -16,6 +16,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from backend.app.api.v1 import events
+from backend.app.core.config import settings
 from backend.app.services.event_manager import EventManager
 from backend.app.services.lpr_engine import (
     LPREngine,
@@ -23,6 +24,7 @@ from backend.app.services.lpr_engine import (
     match_roster_plate,
     normalize_plate_text,
 )
+from backend.app.services.plate_vote import plate_vote_tracker
 from backend.database.engine import SessionLocal, get_sqlite_engine, init_db
 from backend.database.models import Event as EventModel
 from backend.database.models import Vehicle as VehicleModel
@@ -59,6 +61,22 @@ def isolated_lpr_cooldown(monkeypatch, tmp_path):
         "lpr_event_manager",
         EventManager(cooldown_seconds=12, clips_dir=str(tmp_path / "lpr-clips")),
     )
+
+
+@pytest.fixture(autouse=True)
+def single_read_confirmation(monkeypatch):
+    """Mặc định cho cả file: một lượt đọc là đủ để công nhận một biển số.
+
+    Cơ chế đồng thuận nhiều frame (BUG-003) là hành vi riêng, được khoá bằng nhóm test
+    `test_plate_needs_*` phía dưới. Các bài còn lại đo những thứ khác — gắn tag phương
+    tiện, KPI, cooldown, hợp đồng API — nên gọi `persist_gate_lpr_events` đúng một lần
+    là đủ diễn đạt ý định của chúng.
+    """
+    monkeypatch.setattr(settings, "LPR_MIN_CONFIRMATIONS", 1)
+    plate_vote_tracker.reset()
+    # Trạng thái lượt xe cũng ở mức module. Không xoá thì một bài vừa thấy xe sẽ để
+    # lại lượt đang dở, và bài kế tiếp chốt nhầm nó thành một lượt hỏng.
+    events._gate_passages.clear()
 
 
 @pytest.fixture
@@ -99,6 +117,24 @@ def _stub_ocr(monkeypatch, plate_text, confidence=0.93, source="ocr"):
 
     monkeypatch.setattr(events.lpr_engine, "read_plate", fake_read)
     return calls
+
+
+def _close_gate_passage(db_session):
+    """Mô phỏng chiếc xe rời khỏi làn để lượt xe hiện tại được chốt.
+
+    Lượt hỏng chỉ được tính khi cả lượt khép lại mà không đọc nổi biển nào, nên test
+    phải đẩy mốc "lần cuối thấy xe" lùi quá cửa sổ vắng bóng rồi gọi lại một nhịp với
+    khung hình không có xe.
+    """
+    for passage in events._gate_passages.values():
+        if passage.vehicle_seen_at is not None:
+            passage.vehicle_seen_at -= events._PASSAGE_GAP_SECONDS + 5.0
+    events.persist_gate_lpr_events(
+        db_session,
+        camera_id=GATE_CAMERA_ID,
+        detections=[],
+        frame_matrix=_gate_frame(),
+    )
 
 
 def _plate_image(text="16H-00215", width=320, height=90):
@@ -303,8 +339,12 @@ def test_extract_license_plate_filters_out_non_plate_text(fake_easyocr):
     assert engine.extract_license_plate(_gate_frame(), [30.0, 40.0, 20.0, 30.0]) == (None, 0.0)
 
 
-def test_extract_license_plate_is_noop_when_easyocr_unavailable(monkeypatch):
+def test_extract_license_plate_is_noop_when_no_ocr_engine_is_installed(monkeypatch):
+    """Không engine nào cài được thì LPR im lặng tắt, không ném lỗi ra luồng gọi."""
     engine = LPREngine()
+    # Recognizer chuyên biển là đường đọc chính; phải tắt cả nó thì mới còn lại đúng
+    # kịch bản "máy không có OCR" mà bài test này mô tả.
+    monkeypatch.setattr(engine.plate_recognizer, "get_model", lambda: None)
 
     def explode(name, *args, **kwargs):
         if name == "easyocr":
@@ -321,6 +361,16 @@ def test_extract_license_plate_is_noop_when_easyocr_unavailable(monkeypatch):
     assert engine.ocr_status() == "unavailable"
 
 
+def test_is_available_stays_ready_when_only_easyocr_is_missing(monkeypatch):
+    """Mất EasyOCR không còn là mất LPR: recognizer chuyên biển vẫn đọc được."""
+    engine = LPREngine()
+    monkeypatch.setattr(engine, "get_reader", lambda: None)
+    monkeypatch.setattr(engine.plate_recognizer, "is_available", lambda: True)
+
+    assert engine.is_available() is True
+    assert engine.ocr_status() == "ready"
+
+
 def test_is_available_reports_ready_when_reader_loads(fake_easyocr):
     engine = LPREngine()
 
@@ -328,9 +378,10 @@ def test_is_available_reports_ready_when_reader_loads(fake_easyocr):
     assert engine.ocr_status() == "ready"
 
 
-def test_read_plate_reports_unavailable_source_without_reader(monkeypatch):
+def test_read_plate_reports_unavailable_source_without_any_engine(monkeypatch):
     engine = LPREngine()
     monkeypatch.setattr(engine, "get_reader", lambda: None)
+    monkeypatch.setattr(engine.plate_recognizer, "get_model", lambda: None)
 
     reading = engine.read_plate(_gate_frame(), [30.0, 40.0, 20.0, 30.0])
 
@@ -552,6 +603,8 @@ def test_weak_plate_never_reaches_the_events_table(db_session, monkeypatch, rese
 
     assert persisted == []
     assert db_session.query(EventModel).filter(EventModel.license_plate.isnot(None)).all() == []
+
+    _close_gate_passage(db_session)
     kpi = KpiRepository(db_session).get_kpi()
     assert kpi.gate_lpr_failed == 1
     assert kpi.gate_lpr_success == 0
@@ -823,7 +876,106 @@ def test_expired_cooldown_allows_the_next_passage(db_session, monkeypatch):
     assert len(second) == 1
 
 
-def test_non_inbound_zone_and_non_vehicle_classes_are_skipped(db_session, monkeypatch):
+def test_plate_needs_repeated_reads_before_it_becomes_a_passage(db_session, monkeypatch):
+    """Đọc được một lần thì chưa đủ; phải đủ số lần đồng thuận mới ghi lượt xe."""
+    monkeypatch.setattr(settings, "LPR_MIN_CONFIRMATIONS", 3)
+    _stub_ocr(monkeypatch, "29A-123.45")
+    detection = _inbound_detection()
+
+    def run_once():
+        return events.persist_gate_lpr_events(
+            db_session,
+            camera_id=GATE_CAMERA_ID,
+            detections=[detection],
+            frame_matrix=_gate_frame(),
+        )
+
+    assert run_once() == [], "Lượt đọc thứ nhất chưa đủ bằng chứng"
+    assert run_once() == [], "Lượt đọc thứ hai vẫn chưa đủ"
+    third = run_once()
+
+    assert len(third) == 1
+    assert third[0].license_plate == "29A-123.45"
+
+
+def test_one_off_misread_never_becomes_a_passage(db_session, monkeypatch):
+    """Chuỗi ma đọc trúng một lần rồi biến mất thì không được ghi thành lượt xe.
+
+    Dựng lại đúng ca đo được trên clip cổng: chiếc `15H-032.03` bị đồng hồ camera in đè
+    lên dòng trên của tấm biển hai dòng, sinh ra các biến thể `55H-032.03` (0.715) và
+    `11H-032.03` (0.978). Chú ý con số thứ hai — nó tự tin hơn cả nhiều lần đọc đúng,
+    nên siết ngưỡng confidence không loại được nó; chỉ số lần lặp mới loại được.
+    """
+    monkeypatch.setattr(settings, "LPR_MIN_CONFIRMATIONS", 3)
+    detection = _inbound_detection()
+    reads = iter([
+        ("15H-032.03", 0.99),
+        ("55H-032.03", 0.715),
+        ("15H-032.03", 1.0),
+        ("11H-032.03", 0.978),
+        ("15H-032.03", 0.983),
+    ])
+
+    def fake_read(frame_matrix, bbox, trigger_box=None):
+        plate, confidence = next(reads)
+        return PlateReading(plate, confidence, "plate_ocr")
+
+    monkeypatch.setattr(events.lpr_engine, "read_plate", fake_read)
+
+    persisted = []
+    for _ in range(5):
+        persisted.extend(
+            events.persist_gate_lpr_events(
+                db_session,
+                camera_id=GATE_CAMERA_ID,
+                detections=[detection],
+                frame_matrix=_gate_frame(),
+            )
+        )
+
+    plates = [event.license_plate for event in persisted]
+    assert plates == ["15H-032.03"], f"Chuỗi ma đã lọt vào sổ: {plates}"
+
+
+def test_repeat_passage_is_recorded_again_so_the_live_list_keeps_moving(db_session, monkeypatch):
+    """Cùng một biển đi qua lần nữa vẫn sinh sự kiện mới sau khi hết cooldown.
+
+    Đã có lúc việc chặn trùng nằm ở tầng ghi dữ liệu — biển nào từng thấy thì thôi không
+    ghi nữa — và cái giá phải trả là bảng "Biển số đã nhận diện" đóng băng vĩnh viễn ở
+    lần cuối mỗi xe được thấy. Chặn trùng giờ nằm ở tầng đếm KPI
+    (`GET /events/gate-kpi` đếm biển số phân biệt), nên tầng dữ liệu phải ghi đủ.
+    """
+    _stub_ocr(monkeypatch, "29A-123.45")
+    detection = _inbound_detection()
+
+    first = events.persist_gate_lpr_events(
+        db_session,
+        camera_id=GATE_CAMERA_ID,
+        detections=[detection],
+        frame_matrix=_gate_frame(),
+    )
+    for key in events.lpr_event_manager._cooldown_cache:
+        events.lpr_event_manager._cooldown_cache[key] -= 20.0
+
+    second = events.persist_gate_lpr_events(
+        db_session,
+        camera_id=GATE_CAMERA_ID,
+        detections=[detection],
+        frame_matrix=_gate_frame(),
+    )
+
+    assert len(first) == 1
+    assert len(second) == 1, "Lượt qua cổng sau phải được ghi, nếu không danh sách sẽ chết"
+
+
+def test_non_inbound_zone_and_non_vehicle_classes_are_never_read_by_bbox(db_session, monkeypatch):
+    """Người, xe đạp và xe ngoài làn không bao giờ được đưa bbox của mình vào OCR.
+
+    Vẫn còn đúng một lượt quét toàn khung (bbox None): camera cổng ngắm cận cảnh nên khi
+    xe áp sát, YOLO mất dấu nó và bbox không còn là thứ đáng tin để bám theo — xem ghi
+    chú ở `persist_gate_lpr_events`. Điều bài test này khoá là OCR không được chạy *theo
+    bbox của đối tượng ngoài phạm vi LPR*.
+    """
     calls = _stub_ocr(monkeypatch, "29A-123.45")
 
     outside_lane = _inbound_detection(zone_name="Bãi chờ")
@@ -833,15 +985,15 @@ def test_non_inbound_zone_and_non_vehicle_classes_are_skipped(db_session, monkey
     bicycle = _inbound_detection(zone_name="Làn IN 2")
     bicycle["object_class"] = "bicycle"
 
-    persisted = events.persist_gate_lpr_events(
+    events.persist_gate_lpr_events(
         db_session,
         camera_id=GATE_CAMERA_ID,
         detections=[outside_lane, no_zone, pedestrian, bicycle],
         frame_matrix=_gate_frame(),
     )
 
-    assert persisted == []
-    assert calls == [], "Không được gọi OCR cho đối tượng ngoài phạm vi LPR"
+    read_bboxes = [bbox for _frame, bbox, _trigger in calls]
+    assert read_bboxes == [None], "Chỉ được phép quét toàn khung, không đọc theo bbox nào"
 
 
 def test_other_cameras_never_run_lpr(db_session, monkeypatch):
@@ -895,11 +1047,52 @@ def test_unreadable_plate_counts_as_failed_passage(db_session, monkeypatch, rese
     )
 
     assert persisted == []
+
+    # Chiếc xe đứng nhiều frame vẫn chỉ là một lượt: lượt hỏng chốt lúc nó rời làn.
+    _close_gate_passage(db_session)
     kpi = KpiRepository(db_session).get_kpi()
-    # Cùng một chiếc xe đứng nhiều frame chỉ được tính hỏng một lần trong cooldown.
     assert kpi.gate_vehicles_total == 1
     assert kpi.gate_lpr_failed == 1
     assert kpi.gate_lpr_success == 0
+
+
+def test_frames_right_after_a_successful_read_are_not_counted_as_failures(
+    db_session, monkeypatch, reset_gate_kpi
+):
+    """Khúc đầu và khúc đuôi của cùng một lượt xe không được tính là lượt hỏng.
+
+    Một chiếc xe qua cổng mất nhiều giây: lúc mới vào tấm biển chưa tới tầm, lúc đi khỏi
+    thì đã ra khỏi tầm, chỉ khúc giữa mới đọc được. Trước khi có ràng buộc này, chính
+    chiếc xe vừa đọc thành công lại tự cộng thêm lượt "không đọc được" cho hai khúc kia
+    — đo trên máy đang chạy: 154 lượt hỏng trong 41 phút trên một clip chỉ có 5 xe, tất
+    cả đều đọc được.
+    """
+    detection = _inbound_detection()
+    _stub_ocr(monkeypatch, "29A-123.45")
+    events.persist_gate_lpr_events(
+        db_session,
+        camera_id=GATE_CAMERA_ID,
+        detections=[detection],
+        frame_matrix=_gate_frame(),
+    )
+
+    # Ngay sau đó tấm biển ra khỏi tầm, nhưng chiếc xe vẫn còn trong làn.
+    monkeypatch.setattr(
+        events.lpr_engine,
+        "read_plate",
+        lambda frame, bbox, trigger_box=None: PlateReading(None, 0.2, "unreadable"),
+    )
+    for _ in range(3):
+        events.persist_gate_lpr_events(
+            db_session,
+            camera_id=GATE_CAMERA_ID,
+            detections=[detection],
+            frame_matrix=_gate_frame(),
+        )
+
+    kpi = KpiRepository(db_session).get_kpi()
+    assert kpi.gate_lpr_success == 1
+    assert kpi.gate_lpr_failed == 0, "Cùng một lượt xe không được vừa đọc được vừa hỏng"
 
 
 def test_average_confidence_accumulates_across_passages(db_session, monkeypatch, reset_gate_kpi):
@@ -970,9 +1163,82 @@ def test_events_endpoint_returns_lpr_passages_for_gate_camera(db_session, monkey
     assert row["camera_id"] == GATE_CAMERA_ID
     assert row["license_plate"] == "29A-123.45"
     assert row["severity_level"] == 2
+    # `lane_id` là tên làn chép lại từ detection lúc ghi sự kiện, còn `zone_name` được
+    # tra ngược từ bảng zones theo zone_id — nên nó mang tên zone hiện hành trong seed.
     assert row["lane_id"] == "Làn IN 1"
-    assert row["zone_name"] == "Làn IN 1"
+    assert row["zone_name"] == "Làn IN"
     assert row["confidence"] == pytest.approx(0.93)
+
+
+def test_gate_kpi_counts_every_passage_not_just_the_latest_page(db_session, reset_gate_kpi):
+    """KPI đếm trên toàn bộ bảng events, không phải trên trang 20 dòng của dashboard.
+
+    Đây là hồi quy cho đúng triệu chứng đã gặp: dashboard tự đếm trên mảng sự kiện vừa
+    tải về, mà mảng đó bị chặn ở `limit = 20`, nên "Lượt xe qua cổng" đứng cứng ở 20 dù
+    cơ sở dữ liệu có bao nhiêu lượt đi nữa.
+    """
+    for index in range(25):
+        db_session.add(
+            EventModel(
+                id=f"evt-kpi-{index:02d}",
+                timestamp=datetime(2026, 8, 31, 9, 0, index, tzinfo=timezone.utc),
+                camera_id=GATE_CAMERA_ID,
+                event_type="LPR_PASSAGE",
+                severity_level=2,
+                license_plate=f"29A-100.{index:02d}",
+                object_class="truck",
+                confidence=0.90,
+            )
+        )
+    # Cùng một chiếc xe đi qua lần nữa ở vòng lặp video sau: thêm bản ghi, không thêm xe.
+    db_session.add(
+        EventModel(
+            id="evt-kpi-repeat",
+            timestamp=datetime(2026, 8, 31, 9, 5, 0, tzinfo=timezone.utc),
+            camera_id=GATE_CAMERA_ID,
+            event_type="LPR_PASSAGE",
+            severity_level=2,
+            license_plate="29A-100.00",
+            object_class="truck",
+            confidence=0.90,
+        )
+    )
+    # Vi phạm zone của chính camera này không phải một lượt xe qua cổng.
+    db_session.add(
+        EventModel(
+            id="evt-kpi-noise",
+            timestamp=datetime(2026, 8, 31, 9, 1, 0, tzinfo=timezone.utc),
+            camera_id=GATE_CAMERA_ID,
+            event_type="ZONE_VIOLATION",
+            severity_level=3,
+            object_class="person",
+            confidence=0.80,
+        )
+    )
+    KpiRepository(db_session).update_kpi(gate_lpr_failed=4)
+    db_session.commit()
+
+    def override_get_db():
+        yield db_session
+
+    app.dependency_overrides[events.get_db] = override_get_db
+    try:
+        response = TestClient(app).get(
+            "/api/v1/events/gate-kpi", params={"camera_id": GATE_CAMERA_ID}
+        )
+    finally:
+        app.dependency_overrides.pop(events.get_db, None)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["lpr_success"] == 25, (
+        "Phải vượt trần 20 dòng của dashboard, và đếm theo biển số phân biệt nên lượt "
+        "đi qua lần thứ hai của cùng một xe không làm tăng con số"
+    )
+    assert payload["lpr_failed"] == 4
+    assert payload["vehicles_total"] == 29
+    # Event.confidence lưu thang 0-1, KPI hiển thị phần trăm.
+    assert payload["avg_confidence"] == pytest.approx(90.0)
 
 
 def test_live_detections_reports_ocr_status_for_gate_camera(db_session, monkeypatch):

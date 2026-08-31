@@ -1,0 +1,39 @@
+{
+  "video": "data/video/GATE-01.mp4",
+  "camera_id": "GATE-01",
+  "source_footage": "data/video/Gate/Gate-In3.mp4 (camera 'Cvao-Bien-L2')",
+  "note": "Năm lượt xe trong clip demo, biển số đọc bằng mắt trên frame gốc 2560x1440 sau khi phóng to 4x. Cửa sổ thời gian tính theo clip đã ghép (backend/scripts/prepare_gate_lpr_clip.py); mỗi lượt dài 14 giây.",
+  "passages": [
+    {
+      "plate": "15H-032.03",
+      "start_seconds": 0.0,
+      "end_seconds": 13.9,
+      "plate_layout": "two_line",
+      "note": "Biển vuông 2 dòng. Timestamp của camera đè lên dòng trên ở khoảng t=4-9s."
+    },
+    {
+      "plate": "15C-054.62",
+      "start_seconds": 14.0,
+      "end_seconds": 27.9,
+      "plate_layout": "two_line"
+    },
+    {
+      "plate": "35H-093.47",
+      "start_seconds": 28.0,
+      "end_seconds": 41.9,
+      "plate_layout": "one_line"
+    },
+    {
+      "plate": "15H-190.62",
+      "start_seconds": 42.0,
+      "end_seconds": 55.9,
+      "plate_layout": "one_line"
+    },
+    {
+      "plate": "15H-322.81",
+      "start_seconds": 56.0,
+      "end_seconds": 69.8,
+      "plate_layout": "one_line"
+    }
+  ]
+}

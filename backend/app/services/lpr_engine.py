@@ -1,9 +1,23 @@
 """LPR OCR Engine cho camera cổng GATE-01 (REQ-001, TASK-007/BUG-002).
 
 Tách riêng khỏi vision_pipeline.py vì hai thứ có vòng đời khác nhau: YOLO-World nạp
-ngay lúc khởi động cho cả 3 camera, còn EasyOCR chỉ cần cho đúng một camera cổng.
-Nạp EasyOCR ở __init__ sẽ kéo torch + tải model detection/recognition vào mọi tiến
-trình, kể cả khi người dùng chỉ mở tab giám sát khu vực — nên reader ở đây là lazy.
+ngay lúc khởi động cho cả 3 camera, còn OCR chỉ cần cho đúng một camera cổng. Nạp
+model ở __init__ sẽ kéo torch/onnxruntime vào mọi tiến trình, kể cả khi người dùng chỉ
+mở tab giám sát khu vực — nên mọi reader ở đây đều lazy.
+
+Có hai đường đọc, thử theo thứ tự:
+
+1. **Định vị biển bằng màu + recognizer chuyên biển số** (`plate_detector` +
+   fast-plate-ocr). Đây là đường chính. Đo trên 13 frame có biển của clip cổng:
+   12/13 đọc đúng, 138ms mỗi frame.
+2. **EasyOCR + heuristic Canny** — đường cũ, giữ làm dự phòng cho trường hợp
+   fast-plate-ocr không cài được. Cùng bộ 13 frame: 5/13 đúng, và trượt cả hai biển
+   vuông 2 dòng vì EasyOCR trả mỗi dòng thành một token rời.
+
+Hai engine tổng quát khác đã đo và bị loại, đừng thử lại mà không có số mới:
+RapidOCR (PP-OCRv4 trên ONNX) toàn khung 9/13 và 1293ms; RapidOCR trên vùng biển đã
+khoanh cũng 9/13 và 1710ms. Cả hai trượt sạch biển 2 dòng. PaddleOCR bản gốc không cài
+được: paddlepaddle chưa có wheel cho Python 3.14.
 """
 
 import logging
@@ -13,6 +27,7 @@ from dataclasses import dataclass, field
 from typing import Any, List, Sequence, Tuple
 
 from backend.app.core.config import settings
+from backend.app.services.plate_detector import crop_bbox, find_plate_regions
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +108,17 @@ _DIGIT_LOOKALIKES = {
 
 # Biển số Việt Nam: 2 chữ số mã tỉnh + 1-2 chữ cái seri + 4-5 chữ số.
 _PLATE_STRUCTURE_RE = re.compile(r"^([0-9A-Z]{2})([A-Z]{1,2})([0-9A-Z]{4,5})$")
+
+# Model fast-plate-ocr mặc định. 'cct-s-v2-global-model' (~10MB) đọc đúng 5/5 biển đo
+# được trên clip cổng với char_prob > 0.999 và ~45ms mỗi tấm biển trên CPU. Bản 'xs'
+# nhỏ hơn nhưng chưa đo trên footage này.
+DEFAULT_PLATE_MODEL = "cct-s-v2-global-model"
+
+# Sàn confidence riêng cho recognizer chuyên biển. Thang điểm của nó khác hẳn EasyOCR:
+# đọc đúng thì char_prob gần như luôn > 0.99, còn khi đoán bừa trên một mảnh không phải
+# biển thì tụt xuống dưới 0.5. Nhờ khoảng cách đó, ngưỡng ở đây đặt cao được mà không
+# mất lượt đọc thật — và cao là cần thiết vì vùng màu vàng có thể là vạch sơn.
+MIN_PLATE_MODEL_CONFIDENCE = 0.60
 
 
 def _coerce_digits(chunk: str) -> str:
@@ -206,14 +232,92 @@ class PlateReading:
 
     plate_text: str | None
     confidence: float
-    # "ocr": OCR đọc trọn vẹn đúng định dạng. "roster_match": ghép mảnh vào biển đã biết.
-    # "unreadable": có gọi OCR nhưng không ra biển. "unavailable": OCR engine không dùng được.
+    # "plate_ocr": recognizer chuyên biển đọc từ vùng biển đã khoanh. "ocr": EasyOCR đọc
+    # trọn vẹn đúng định dạng. "roster_match": ghép mảnh vào biển đã biết. "unreadable":
+    # có gọi OCR nhưng không ra biển. "unavailable": không engine nào dùng được.
     source: str
     fragments: Tuple[Tuple[str, float], ...] = field(default=())
 
     @property
     def recognized(self) -> bool:
         return self.plate_text is not None
+
+
+class PlateRecognizer:
+    """fast-plate-ocr: recognizer chuyên biển số, nạp lazy, chạy trên CPU qua ONNX.
+
+    Khác OCR tổng quát ở chỗ nó nhận nguyên tấm biển đã cắt và trả thẳng chuỗi ký tự —
+    kể cả biển vuông 2 dòng, thứ mà EasyOCR và RapidOCR đều trả thành hai token rời rồi
+    ghép sai thứ tự. Model 'cct-s-v2-global-model' còn trả về vùng quốc gia; đo trên
+    clip cổng, cả 5 biển đều được gán region='Vietnam' với xác suất > 0.999.
+    """
+
+    def __init__(self, model_name: str | None = None):
+        self.model_name = model_name or DEFAULT_PLATE_MODEL
+        self._model = None
+        self._lock = threading.Lock()
+        self._unavailable = False
+
+    def get_model(self):
+        """Nạp model ở lần đọc đầu tiên. Trả None nếu không cài được — thiếu recognizer
+        làm mất đường đọc chính chứ không được làm sập luồng phát hiện của cổng."""
+        if self._model is not None or self._unavailable:
+            return self._model
+
+        with self._lock:
+            if self._model is not None or self._unavailable:
+                return self._model
+            try:
+                from fast_plate_ocr import LicensePlateRecognizer
+
+                logger.info("Lazy-loading fast-plate-ocr (model=%s)", self.model_name)
+                self._model = LicensePlateRecognizer(self.model_name)
+            except Exception as exc:
+                self._unavailable = True
+                logger.warning(
+                    "Không nạp được fast-plate-ocr, LPR lùi về EasyOCR: %s", exc
+                )
+            return self._model
+
+    def is_available(self) -> bool:
+        return self.get_model() is not None
+
+    def read(self, plate_image) -> Tuple[str, float] | None:
+        """Đọc một tấm biển đã cắt. Trả (chuỗi thô, confidence) hoặc None."""
+        model = self.get_model()
+        if model is None or plate_image is None or getattr(plate_image, "size", 0) == 0:
+            return None
+
+        import cv2
+        import numpy as np
+
+        # Model nhận RGB; ảnh từ OpenCV là BGR. Đưa nhầm thứ tự kênh vẫn chạy nhưng
+        # đọc sai ký tự, và không có lỗi nào được ném ra để nhận biết.
+        rgb = cv2.cvtColor(plate_image, cv2.COLOR_BGR2RGB)
+        try:
+            # Thiếu return_confidence thì char_probs về rỗng và mọi lượt đọc đều mang
+            # confidence 0.0 — tức là bị sàn tin cậy chặn sạch dù đọc đúng ký tự.
+            predictions = model.run(rgb, return_confidence=True)
+        except Exception as exc:
+            logger.warning("Lỗi khi chạy recognizer biển số: %s", exc)
+            return None
+
+        if not isinstance(predictions, list):
+            predictions = [predictions]
+        for prediction in predictions:
+            text = getattr(prediction, "plate", None)
+            if not text:
+                continue
+            char_probs = getattr(prediction, "char_probs", None)
+            # Confidence của cả tấm biển là ký tự yếu nhất, không phải trung bình: một
+            # ký tự đọc bấp bênh làm sai cả biển số, mà trung bình thì 9 ký tự chắc
+            # chắn dư sức che lấp nó.
+            if char_probs is not None and len(char_probs) > 0:
+                confidence = float(np.min(np.asarray(char_probs)))
+            else:
+                confidence = float(getattr(prediction, "confidence", 0.0) or 0.0)
+            return str(text), confidence
+        return None
 
 
 class LPREngine:
@@ -241,6 +345,7 @@ class LPREngine:
         self._reader = None
         self._reader_lock = threading.Lock()
         self._reader_unavailable = False
+        self.plate_recognizer = PlateRecognizer()
 
     def get_reader(self):
         """Dựng EasyOCR Reader ở lần đọc biển số đầu tiên, tái dùng cho các lần sau.
@@ -265,8 +370,8 @@ class LPREngine:
             return self._reader
 
     def is_available(self) -> bool:
-        """OCR engine có dựng được không. Gọi lần đầu sẽ kéo theo việc nạp model."""
-        return self.get_reader() is not None
+        """Có ít nhất một engine đọc được không. Gọi lần đầu sẽ kéo theo việc nạp model."""
+        return self.plate_recognizer.is_available() or self.get_reader() is not None
 
     def ocr_status(self) -> str:
         """'ready' | 'unavailable' — để API báo tường minh thay vì im lặng trả rỗng."""
@@ -457,6 +562,71 @@ class LPREngine:
             return None
         return roi
 
+    def read_plate_by_detector(
+        self,
+        frame_matrix,
+        bbox: Sequence[float] | None = None,
+    ) -> PlateReading | None:
+        """Đường đọc chính: khoanh tấm biển bằng màu rồi đưa cho recognizer chuyên biển.
+
+        `bbox` chỉ để thu hẹp không gian tìm kiếm về một chiếc xe. Bỏ trống thì quét
+        vùng cấu hình ở `GATE_PLATE_SCAN_REGION` — cần thiết ở camera cổng, vì khi xe áp
+        sát bốt nó chiếm gần trọn khung và YOLO ngừng nhận ra đó là xe, đúng lúc tấm
+        biển rõ nhất. Vùng đó cắt bỏ phần mặt đường vốn không bao giờ có biển, nhờ vậy
+        giảm hơn nửa số lần gọi OCR trên các mảng màu vàng của vạch sơn và bốt.
+
+        Trả None nghĩa là "đường đọc này không có gì để nói, thử cách khác đi" — xảy ra
+        khi recognizer không cài được, hoặc khi không khoanh được vùng biển nào. Khác hẳn
+        với PlateReading 'unreadable', vốn có nghĩa là đã nhìn thấy một tấm biển mà không
+        đọc nổi nó.
+        """
+        if not self.plate_recognizer.is_available():
+            return None
+
+        if bbox is not None:
+            search_area = crop_bbox(frame_matrix, bbox)
+        else:
+            scan_region = settings.gate_plate_scan_region()
+            search_area = (
+                crop_bbox(frame_matrix, scan_region) if scan_region else frame_matrix
+            )
+        if search_area is None or getattr(search_area, "size", 0) == 0:
+            return PlateReading(None, 0.0, "unreadable")
+
+        regions = find_plate_regions(search_area)
+        if not regions:
+            # Không khoanh được tấm biển nào. Có thể là khung hình không có xe, cũng có
+            # thể là biển bẩn hoặc màu lạ nằm ngoài dải HSV — nên nhường lượt cho nhánh
+            # EasyOCR quét cản va thay vì kết luận "không đọc được".
+            return None
+
+        fragments: List[Tuple[str, float]] = []
+        best: Tuple[str, float] | None = None
+        for region in regions:
+            result = self.plate_recognizer.read(region.image)
+            if result is None:
+                continue
+            raw_text, confidence = result
+            fragments.append((raw_text, confidence))
+            if confidence < MIN_PLATE_MODEL_CONFIDENCE:
+                logger.debug(
+                    "Bỏ '%s' từ vùng %s: confidence %.3f < sàn model %.2f",
+                    raw_text, region.rect, confidence, MIN_PLATE_MODEL_CONFIDENCE,
+                )
+                continue
+            plate_text = normalize_plate_text(raw_text)
+            if plate_text and (best is None or confidence > best[1]):
+                best = (plate_text, confidence)
+
+        if best is not None:
+            return self._accept(best[0], best[1], "plate_ocr", fragments)
+        return PlateReading(
+            None,
+            round(max((c for _t, c in fragments), default=0.0), 3),
+            "unreadable",
+            tuple(fragments),
+        )
+
     def read_plate(
         self,
         frame_matrix,
@@ -465,10 +635,19 @@ class LPREngine:
     ) -> PlateReading:
         """Đọc biển số của một xe.
 
-        Có `trigger_box` thì chỉ chạy đúng một lượt OCR trong ô cố định đó — ô này ngắm
-        sẵn vào tầm biển số ở vị trí dừng bốt, đúng cách ANPR cổng thật hoạt động.
-        Không có thì lùi về quét cản va: khoanh ứng viên -> OCR -> khớp roster.
+        Thử recognizer chuyên biển trước; chỉ khi nó không cài được mới lùi về EasyOCR.
+
+        Ở nhánh EasyOCR: có `trigger_box` thì chỉ chạy đúng một lượt OCR trong ô cố định
+        đó, không có thì quét cản va (khoanh ứng viên -> OCR -> khớp roster).
         """
+        by_detector = self.read_plate_by_detector(frame_matrix, bbox)
+        if by_detector is not None:
+            # Recognizer chuyên biển chạy được thì nó là câu trả lời cuối cùng, kể cả khi
+            # không đọc ra biển nào. Chạy tiếp EasyOCR ở đây sẽ kéo torch vào tiến trình
+            # và tốn thêm ~300ms mỗi frame, mà đo trên clip cổng nó không cứu thêm được
+            # lượt xe nào — nó chỉ thêm cơ hội sinh chuỗi rác.
+            return by_detector
+
         reader = self.get_reader()
         if reader is None:
             return PlateReading(None, 0.0, "unavailable")
