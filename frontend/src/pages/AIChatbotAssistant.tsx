@@ -5,9 +5,22 @@ import { VideoModal } from '../components/common/VideoModal';
 /** Prompt chips gợi ý — bấm là gửi thẳng câu hỏi tới trợ lý. */
 const SUGGESTIONS = [
   'Hôm nay có bao nhiêu xe lạ vào?',
-  'Có vi phạm khu vực cấm nào không?',
-  'Xe nâng hoạt động thế nào hôm nay?',
+  'Đưa tôi 3 clip vi phạm gần nhất',
+  'Loại xe nào vi phạm nhiều nhất tuần này?',
+  'Xe nâng hoạt động thế nào tuần này?',
 ];
+
+/** ISO timestamp của clip -> "17:38 27/08". Giá trị lạ thì trả về nguyên văn. */
+const formatClipTime = (iso: string): string => {
+  const parsed = new Date(iso);
+  if (Number.isNaN(parsed.getTime())) return iso;
+  return parsed.toLocaleString('vi-VN', {
+    hour: '2-digit',
+    minute: '2-digit',
+    day: '2-digit',
+    month: '2-digit',
+  });
+};
 
 export const AIChatbotAssistant: React.FC = () => {
   const { chatMessages, sendChatMessage } = useApp();
@@ -129,6 +142,9 @@ export const AIChatbotAssistant: React.FC = () => {
                   color: isError ? 'var(--p0)' : 'var(--ink)',
                   opacity: isLoading ? 0.7 : 1,
                   fontStyle: isLoading ? 'italic' : 'normal',
+                  // Câu trả lời dạng liệt kê/thống kê xuống dòng bằng '\n'; không
+                  // giữ khoảng trắng thì mọi gạch đầu dòng dồn thành một khối chữ.
+                  whiteSpace: 'pre-wrap',
                 }}
               >
                 {m.text}
@@ -167,74 +183,95 @@ export const AIChatbotAssistant: React.FC = () => {
                 </details>
               )}
 
-              {/* Clip 10s bằng chứng — mở bằng <VideoModal> dùng chung. */}
-              {m.clipUrl && (
+              {/* Clip 10s bằng chứng của đúng những sự kiện có trong câu trả lời. */}
+              {m.clips && m.clips.length > 0 && (
                 <div
-                  style={{
-                    marginTop: '10px',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '10px',
-                    background: 'var(--panel)',
-                    border: '1px solid var(--line2)',
-                    borderRadius: '13px',
-                    padding: '10px 13px',
-                    maxWidth: '430px',
-                  }}
+                  role="list"
+                  aria-label={`${m.clips.length} clip bằng chứng`}
+                  style={{ marginTop: '10px', display: 'flex', flexDirection: 'column', gap: '7px' }}
                 >
-                  <span
-                    style={{
-                      fontSize: '9px',
-                      fontWeight: 700,
-                      background: 'var(--p0)',
-                      color: '#fff',
-                      padding: '2px 7px',
-                      borderRadius: '5px',
-                      flex: 'none',
-                    }}
-                  >
-                    CLIP 10s
-                  </span>
-                  <span style={{ fontSize: '11px', color: 'var(--ink2)', flex: 1, minWidth: 0 }}>
-                    Video bằng chứng của sự kiện
-                  </span>
-                  <button
-                    onClick={() => setActiveClipUrl(m.clipUrl || null)}
-                    aria-label="Xem clip 10 giây bằng chứng"
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '6px',
-                      fontSize: '11px',
-                      fontWeight: 600,
-                      padding: '5px 11px',
-                      borderRadius: '8px',
-                      border: '1px solid var(--line2)',
-                      background: 'transparent',
-                      color: 'var(--ink)',
-                      cursor: 'pointer',
-                      fontFamily: 'inherit',
-                      flex: 'none',
-                    }}
-                  >
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-                      <path d="M8 5v14l11-7z" />
-                    </svg>
-                    Xem clip
-                  </button>
-                  <a
-                    href={m.clipUrl}
-                    download
-                    style={{
-                      fontSize: '11px',
-                      fontWeight: 600,
-                      color: 'var(--ink3)',
-                      textDecoration: 'none',
-                      flex: 'none',
-                    }}
-                  >
-                    Tải
-                  </a>
+                  {m.clips.map((clip, idx) => (
+                    <div
+                      key={clip.event_id || `${clip.url}-${idx}`}
+                      role="listitem"
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '10px',
+                        background: 'var(--panel)',
+                        border: '1px solid var(--line2)',
+                        borderRadius: '13px',
+                        padding: '10px 13px',
+                        maxWidth: '470px',
+                      }}
+                    >
+                      <span
+                        style={{
+                          fontSize: '9px',
+                          fontWeight: 700,
+                          background: 'var(--p0)',
+                          color: '#fff',
+                          padding: '2px 7px',
+                          borderRadius: '5px',
+                          flex: 'none',
+                        }}
+                      >
+                        CLIP 10s
+                      </span>
+                      <span
+                        title={clip.label || undefined}
+                        style={{
+                          fontSize: '11px',
+                          color: 'var(--ink2)',
+                          flex: 1,
+                          minWidth: 0,
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
+                        {clip.label || 'Video bằng chứng của sự kiện'}
+                        {clip.timestamp ? ` · ${formatClipTime(clip.timestamp)}` : ''}
+                      </span>
+                      <button
+                        onClick={() => setActiveClipUrl(clip.url)}
+                        aria-label={`Xem clip 10 giây bằng chứng${clip.label ? `: ${clip.label}` : ''}`}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '6px',
+                          fontSize: '11px',
+                          fontWeight: 600,
+                          padding: '5px 11px',
+                          borderRadius: '8px',
+                          border: '1px solid var(--line2)',
+                          background: 'transparent',
+                          color: 'var(--ink)',
+                          cursor: 'pointer',
+                          fontFamily: 'inherit',
+                          flex: 'none',
+                        }}
+                      >
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                          <path d="M8 5v14l11-7z" />
+                        </svg>
+                        Xem clip
+                      </button>
+                      <a
+                        href={clip.url}
+                        download
+                        style={{
+                          fontSize: '11px',
+                          fontWeight: 600,
+                          color: 'var(--ink3)',
+                          textDecoration: 'none',
+                          flex: 'none',
+                        }}
+                      >
+                        Tải
+                      </a>
+                    </div>
+                  ))}
                 </div>
               )}
             </div>
