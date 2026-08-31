@@ -107,6 +107,16 @@ class Settings(BaseSettings):
     # open-vocabulary hoặc fallback sang model COCO.
     DETECTION_MODEL_WEIGHTS: str = "sentri-yolo11s.pt"
 
+    # Ghi đè weights cho từng camera: {"camera_id": "ten-file.pt"}. Camera không khai
+    # báo ở đây dùng DETECTION_MODEL_WEIGHTS.
+    #
+    # GATE-01 cần bộ khác vì sentri-yolo11s được finetune trên ảnh bãi container chụp
+    # từ xa, còn camera cổng (Cvao-Bien-L2) đặt ngang tầm cản trước và xe chiếm gần
+    # trọn khung. Đo trên clip cổng: sentri-yolo11s gán đầu kéo thành 'motorbike' và
+    # rỗng ở nhiều frame, yolov8s-worldv2 trả truck/container 0.45-0.69 đều đặn.
+    # Trên footage cổng cũ khoảng cách còn lớn hơn: 1 box/6 frame so với 14.
+    DETECTION_MODEL_WEIGHTS_BY_CAMERA: str = '{"GATE-01": "yolov8s-worldv2.pt"}'
+
     EVENT_COOLDOWN_SECONDS: int = 15
 
     # Ngưỡng tin cậy tối thiểu để chấp nhận một chuỗi biển số do EasyOCR đọc được
@@ -138,21 +148,61 @@ class Settings(BaseSettings):
     GATE_PLATE_ROSTER: str = ""
 
     # LPR Trigger Box: vùng chữ nhật cố định [x, y, w, h] tính theo phần trăm khung hình,
-    # khoá theo zone_id của làn IN. Xe vào làn thì chỉ chạy OCR đúng trong ô này thay vì
-    # quét cả cản va — dải cản va rộng ~420px chứa watermark "Cvao L1,2", vạch sơn và
-    # chữ số trên thùng container, thừa nguyên liệu để OCR sinh mảnh giả.
+    # khoá theo zone_id của làn IN. Chỉ có tác dụng với nhánh EasyOCR dự phòng.
     #
-    # zB (Làn IN 2) đo trực tiếp trên data/video/GATE-01.mp4: biển đuôi rơ-moóc nằm
-    # trong khoảng x 88-93%, y 79-89% suốt các frame 1200-1450 khi xe dừng ở bốt.
-    # zA (Làn IN 1) chưa có số đo: trong toàn bộ 60s footage, làn 1 chỉ có rơ-moóc đi
-    # ngang nên không có tấm biển nào để đo. Zone nào không khai báo ở đây sẽ tự động
-    # lùi về cơ chế quét cản va cũ — đặt bừa toạ độ vào một mảng nhựa đường còn tệ hơn.
-    GATE_LPR_TRIGGER_BOXES: str = '{"zB": [86.0, 76.0, 9.0, 16.0]}'
+    # Để TRỐNG theo mặc định. Ô ngắm cố định giả định xe luôn dừng đúng một chỗ; đo trên
+    # clip camera biển số thì tấm biển rơi vào x 35-50% ở lượt này và x 79-87% ở lượt
+    # khác, tuỳ xe dừng nông hay sâu — không ô cố định nào bao được cả hai. Đường đọc
+    # chính (plate_detector khoanh theo màu) không cần ô này.
+    GATE_LPR_TRIGGER_BOXES: str = "{}"
+
+    # Vùng quét biển số [x, y, w, h] tính theo phần trăm khung hình, dùng khi đọc biển
+    # mà không bám theo bbox của một chiếc xe cụ thể.
+    #
+    # Đây KHÔNG phải zone làn. Hai thứ bám hai vật khác nhau: zone làn bám tâm bbox xe
+    # (đo được ở x 27-52, y 17-51), còn vùng này bám vị trí tấm biển (x 32-90, y 5-33) —
+    # tấm biển chỉ nằm ở nửa trên khung hình, toàn bộ mặt đường phía dưới không bao giờ
+    # có biển. Gộp hai thứ làm một thì hoặc mất biển, hoặc quét thừa nửa khung hình.
+    #
+    # Đo trên clip cổng, so số biển đọc được với số vùng nhiễu phải gọi OCR:
+    #   toàn khung        51/51 biển, 133 nhiễu, 100% diện tích
+    #   x 25-92, y 0-38   51/51 biển,  58 nhiễu,  25% diện tích  <- đang dùng
+    #   x 25-80, y 0-38   50/51 biển,  22 nhiễu,  21% diện tích
+    # Hẹp hơn nữa thì bắt đầu cắt mất pha xe rời cổng, nơi tấm biển dạt sang phải.
+    #
+    # Để trống thì quét cả khung hình.
+    GATE_PLATE_SCAN_REGION: str = "[25.0, 0.0, 67.0, 38.0]"
 
     # Cửa sổ chống trùng cho sự kiện LPR_PASSAGE: một lượt xe qua cổng nằm trong khung
     # hình nhiều giây liền, mỗi frame lại đọc ra cùng một biển số. Không có cooldown thì
     # một chiếc xe sinh hàng chục event giống hệt nhau.
     LPR_COOLDOWN_SECONDS: int = 12
+
+    # Số lần một chuỗi biển số phải được đọc ra trong LPR_CONFIRMATION_WINDOW_SECONDS
+    # thì mới được công nhận là một lượt xe. Đặt 1 để tắt.
+    #
+    # Recognizer đọc sai ở vài frame lẻ và sai với confidence cao — đo được các chuỗi ma
+    # ở 0.951, 0.978 và 0.920, nằm lọt giữa dải của những lần đọc đúng. Siết ngưỡng
+    # confidence không tách được chúng; thứ tách được là số lần lặp lại.
+    #
+    # Vì sao là 2 chứ không cao hơn. Đếm số phiếu mỗi chuỗi ở đúng nhịp chạy thật
+    # (~1.4 lần/giây) trên trọn clip cổng:
+    #     15H-190.62  19    15H-322.81  19    35H-093.47  14
+    #     15C-054.62  13    15H-032.03   3  <- biển hai dòng bị đồng hồ camera đè
+    #     mọi chuỗi ma quan sát được: đúng 1 phiếu
+    # Chiếc 15H-032.03 chỉ đọc thành công ở ~3% số frame, nên nó là trần thực tế: mức 4
+    # đã làm mất hẳn xe đó, mức 3 vừa khít không còn biên dự phòng. Mức 2 loại sạch mọi
+    # chuỗi ma đã gặp mà vẫn giữ gấp đôi biên an toàn cho ca yếu nhất.
+    #
+    # Đánh đổi còn lại: một chuỗi ma lặp đúng hai lần liên tiếp sẽ lọt. Chưa quan sát
+    # thấy ca nào như vậy; nếu gặp thì cách sửa đúng là gom các chuỗi lệch nhau một ký
+    # tự về cùng một nhóm rồi lấy chuỗi nhiều phiếu nhất, chứ không phải nâng mức này.
+    LPR_MIN_CONFIRMATIONS: int = 2
+
+    # Cửa sổ trượt để đếm số lần đọc ở trên. Phải đủ dài để một chiếc xe dừng ở bốt kịp
+    # được đọc đủ số lần: vòng nhận dạng chạy mỗi ~0.7 giây, xe nằm trong khung nhiều
+    # giây, nên 20 giây là dư dả. Quá ngắn thì biển thật cũng không kịp gom đủ phiếu.
+    LPR_CONFIRMATION_WINDOW_SECONDS: float = 20.0
 
     VIDEO_PATH: str = ""
     DEMO_MODE: bool = False
@@ -249,6 +299,35 @@ class Settings(BaseSettings):
             if values[2] > 0 and values[3] > 0:
                 boxes[str(zone_id)] = values
         return boxes
+
+    def gate_plate_scan_region(self) -> list[float] | None:
+        """Vùng quét biển [x, y, w, h] phần trăm, hoặc None nếu quét cả khung hình."""
+        try:
+            raw = json.loads(self.GATE_PLATE_SCAN_REGION or "null")
+        except (ValueError, TypeError):
+            return None
+        if not isinstance(raw, (list, tuple)) or len(raw) != 4:
+            return None
+        try:
+            values = [float(v) for v in raw]
+        except (TypeError, ValueError):
+            return None
+        if values[2] <= 0 or values[3] <= 0:
+            return None
+        return values
+
+    def detection_weights_for(self, camera_id: str | None) -> str:
+        """Weights YOLO của một camera. JSON hỏng thì lùi về weights chung, không sập."""
+        if not camera_id:
+            return self.DETECTION_MODEL_WEIGHTS
+        try:
+            raw = json.loads(self.DETECTION_MODEL_WEIGHTS_BY_CAMERA or "{}")
+        except (ValueError, TypeError):
+            return self.DETECTION_MODEL_WEIGHTS
+        if not isinstance(raw, dict):
+            return self.DETECTION_MODEL_WEIGHTS
+        weights = raw.get(str(camera_id))
+        return str(weights) if weights else self.DETECTION_MODEL_WEIGHTS
 
     def video_path_override(self, camera_id: str) -> Optional[str]:
         """Trả về video ghi đè cho camera nếu .env có khai báo và file tồn tại."""

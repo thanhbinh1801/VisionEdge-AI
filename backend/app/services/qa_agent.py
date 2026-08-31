@@ -1,96 +1,67 @@
 """
-LLM Text-to-SQL Assistant Engine & Fallback Rule Engine (ADR-004).
+Trợ lý hỏi đáp sự kiện: LLM → QuerySpec → SQL do backend dựng (ADR-004 rev.2).
 
-ADR-004 chọn kiến trúc "LLM Text-to-SQL kết hợp Fallback Rule-based Engine".
-Hai nhánh được thử theo thứ tự, dừng ở nhánh đầu tiên thành công:
+Bản trước để Gemini sinh thẳng SQL. Cách đó đặt lên vai mô hình những thứ nó
+không thể biết chắc — tên cột, giá trị enum thật trong DB, cách join `vehicles` —
+và khi sai thì sai *im lặng*: truy vấn chạy được, trả 0 dòng, câu trả lời nghe
+vẫn trôi chảy.
 
-1. Nhánh LLM (TASK-029) — Google Gemini nhận schema rút gọn kèm câu hỏi tiếng
-   Việt và trả về một câu `SELECT`.
-2. Nhánh Rule Engine (TASK-013) — 5 intent tiếng Việt dựng SQL tham số hóa tĩnh.
+Bản này chia lại việc:
 
-Nhánh 2 là lưới an toàn: hệ thống phải trả lời được cả khi không có mạng, không
-có `GEMINI_API_KEY`, hoặc chưa cài `google-genai`. SQL của cả hai nhánh đều
-được *thực thi thật* trên SQLite và đều đi qua cùng một chốt an toàn.
+1. Chặn chitchat — câu chào không có ý định truy vấn, không tốn lượt gọi LLM.
+2. Gemini trả về `QuerySpec` (JSON có schema cố định), không phải SQL.
+3. `compile_spec` dựng SQL tham số hóa. Backend là nơi duy nhất biết schema.
+4. Không dùng được LLM thì Rule Engine sinh **cùng một `QuerySpec`**, nên chỉ có
+   một đường biên dịch và một đường diễn giải cho cả hai nhánh.
+
+Clip bằng chứng lấy từ chính bộ lọc của truy vấn, nên không thể lạc đề so với
+câu hỏi — đó là lỗi cấu trúc của bản trước.
 """
 
+import json
 import logging
 import re
 import unicodedata
-from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
-from typing import Any, Callable, Optional, Sequence
+from datetime import datetime
+from typing import Any, Optional, Sequence
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from backend.app.core.config import settings
-from backend.app.services.vision_pipeline import OBJECT_VIETNAMESE_NAMES
+from backend.app.services.query_spec import (
+    ICT_TZ,
+    MAX_CLIPS,
+    MAX_LIMIT,
+    CompiledQuery,
+    EventTypeKey,
+    GroupBy,
+    Metric,
+    ObjectClassKey,
+    QuerySpec,
+    TagLabel,
+    TimeRange,
+    class_display_name,
+    compile_spec,
+    render_answer,
+    rows_have_data,
+)
 
 logger = logging.getLogger(__name__)
 
-# Trần số dòng áp cho SQL do LLM sinh ra: một câu hỏi mơ hồ không được phép kéo
-# nguyên bảng events vào bộ nhớ.
-_LLM_ROW_LIMIT = 50
+__all__ = [
+    "ICT_TZ",
+    "GeminiSpecGenerator",
+    "LLMQAAgent",
+    "rule_spec_from_question",
+]
 
-# Schema rút gọn gửi cho LLM. Cố ý chỉ mô tả các cột cần cho hỏi đáp sự kiện,
-# không đưa toàn bộ DDL: prompt ngắn thì SQL sinh ra bám sát hơn và rẻ hơn.
-_SCHEMA_PROMPT = """\
-Bảng và cột khả dụng (SQLite):
 
-events(
-  id TEXT, timestamp DATETIME, camera_id TEXT, zone_id TEXT,
-  event_type TEXT,        -- 'LPR_PASSAGE' | 'ZONE_VIOLATION' | 'RESTRICTED_ACCESS'
-  severity_level INTEGER, -- 1 | 2 | 3, trong đó 3 là nghiêm trọng nhất
-  license_plate TEXT,     -- NULL nếu không đọc được biển số
-  object_class TEXT,      -- 'container','truck','forklift','crane','car','motorbike','bicycle','person'
-  confidence REAL, video_clip_url TEXT, crop_image_url TEXT
-)
-vehicles(id TEXT, license_plate TEXT, vehicle_type TEXT,
-         tag_label TEXT)  -- 'known' (xe quen) | 'unknown' (xe lạ) | 'blacklisted'
-zones(id TEXT, camera_id TEXT, name TEXT, is_active BOOLEAN)
-cameras(id TEXT, name TEXT, location TEXT, status TEXT)
+# --------------------------------------------------------------------- chitchat
 
-Nghĩa tiếng Việt: xe quen = tag_label 'known'; xe lạ = tag_label 'unknown';
-vi phạm khu vực = event_type 'ZONE_VIOLATION' hoặc 'RESTRICTED_ACCESS';
-Container/Xe tải/Xe nâng/Xe cẩu/Xe con/Xe máy/Xe đạp/Người lần lượt là
-container/truck/forklift/crane/car/motorbike/bicycle/person.
-"""
-
-_LLM_INSTRUCTIONS = f"""\
-Bạn là bộ dịch câu hỏi tiếng Việt sang SQL cho hệ thống giám sát camera SentriAI.
-
-Ngữ cảnh nghiệp vụ: hệ thống giám sát an ninh cổng ra vào và bãi kiểm hóa. Người
-dùng là nhân viên trực ca, họ hỏi về xe ra vào cổng (nhận dạng biển số), phương
-tiện lạ/xe trong danh sách đen, vi phạm khu vực cấm và hoạt động của máy móc
-thiết bị trong bãi. Câu hỏi luôn nói về dữ liệu đã ghi nhận trong bảng `events`.
-
-{{schema}}
-
-Quy tắc bắt buộc:
-- Chỉ trả về DUY NHẤT một câu lệnh SQLite bắt đầu bằng SELECT.
-- Không giải thích, không thêm dấu chấm phẩy, không bọc trong khối markdown.
-- Không dùng INSERT/UPDATE/DELETE/DROP/ALTER/CREATE/PRAGMA hay bất kỳ lệnh ghi nào.
-- Luôn thêm LIMIT không vượt quá {_LLM_ROW_LIMIT}.
-- Ưu tiên trả về số liệu tổng hợp (COUNT, SUM) khi câu hỏi hỏi "bao nhiêu".
-- Đặt bí danh (AS) tiếng Việt không dấu, dễ đọc cho các cột kết quả.
-- Mốc thời gian hiện tại: {{now}} (giờ Việt Nam, UTC+7).
-
-Quy tắc ánh xạ ngữ nghĩa (bắt buộc lọc đúng, không được đếm cả bảng):
-- Hỏi về vi phạm khu vực cấm / xâm nhập / khu vực hạn chế:
-  WHERE event_type IN ('ZONE_VIOLATION', 'RESTRICTED_ACCESS')
-- Hỏi về xe ra vào cổng / biển số / lượt qua cổng:
-  WHERE event_type = 'LPR_PASSAGE'
-- Hỏi về xe lạ: JOIN vehicles v ON v.license_plate = e.license_plate
-  WHERE v.tag_label = 'unknown' (xe quen: 'known'; danh sách đen: 'blacklisted')
-- Hỏi về mức độ nghiêm trọng / cảnh báo nặng: WHERE severity_level = 3
-- Hỏi về một loại phương tiện/thiết bị cụ thể: WHERE object_class = '<lớp tương ứng>'
-- Chỉ dùng `SELECT COUNT(*) FROM events` không kèm điều kiện khi câu hỏi thật sự
-  hỏi tổng số toàn bộ sự kiện. Mọi câu hỏi có chủ đề cụ thể đều phải có WHERE.
-"""
-
-# Câu chào hỏi / hỏi năng lực trợ lý: không được dịch sang SQL. Nếu để lọt xuống
-# nhánh Text-to-SQL, LLM buộc phải sinh một câu SELECT và thường trả về
-# `SELECT COUNT(*) FROM events` — tức là đếm sạch bảng để trả lời chữ "hi".
+# Câu chào hỏi / hỏi năng lực trợ lý: không được dịch thành truy vấn. Nếu để lọt
+# xuống nhánh sinh spec, mô hình buộc phải trả về một spec nào đó và thường ra
+# `metric=count` không bộ lọc — tức đếm sạch bảng để trả lời chữ "hi".
 _CHITCHAT_EXACT = {
     "hi",
     "hii",
@@ -132,28 +103,6 @@ _CHITCHAT_ANSWER = (
     "Khi câu trả lời có sự kiện thật, tôi sẽ kèm clip bằng chứng 10 giây."
 )
 
-# Một câu SELECT đơn: chặn kiểu "SELECT 1; DROP TABLE events" nối lệnh qua prompt.
-_SINGLE_SELECT_RE = re.compile(r"^\s*SELECT\b[^;]*;?\s*$", re.IGNORECASE | re.DOTALL)
-
-# Sự kiện được ghi theo giờ Việt Nam (xem `datetime.now(ICT_TZ)` trong
-# backend/app/api/v1/events.py), nên "hôm nay" phải được tính theo cùng múi giờ
-# đó, không phải UTC của máy chủ.
-ICT_TZ = timezone(timedelta(hours=7))
-
-# Chốt an toàn: agent chỉ được phép chạy câu lệnh đọc.
-_FORBIDDEN_SQL = re.compile(
-    r"\b(insert|update|delete|drop|alter|create|attach|detach|replace|pragma|vacuum)\b",
-    re.IGNORECASE,
-)
-
-_TAG_LABEL_VN = {
-    "known": "xe quen",
-    "unknown": "xe lạ",
-    "blacklisted": "xe trong danh sách đen",
-}
-
-_SEVERITY_VN = {1: "Mức 1 (thấp)", 2: "Mức 2 (trung bình)", 3: "Mức 3 (nghiêm trọng)"}
-
 
 def _strip_accents(value: str) -> str:
     """Bỏ dấu để so khớp được cả khi người dùng gõ không dấu."""
@@ -179,175 +128,173 @@ def _is_chitchat(normalized: str) -> bool:
     return bool(_CHITCHAT_PATTERN.search(cleaned))
 
 
-@dataclass(frozen=True)
-class TimeScope:
-    """Khoảng thời gian suy ra từ câu hỏi, kèm cách diễn đạt lại cho câu trả lời."""
+# ------------------------------------------------------------- schema cho Gemini
 
-    label: str
-    start: Optional[datetime]
-    end: Optional[datetime]
+# Schema viết tay thay vì suy ra từ Pydantic: giữ toàn quyền kiểm soát tập con
+# OpenAPI mà Gemini chấp nhận, và tránh việc đổi model Pydantic vô tình đổi luôn
+# hợp đồng gửi cho nhà cung cấp LLM.
+_SPEC_JSON_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "metric": {
+            "type": "string",
+            "enum": [m.value for m in Metric],
+            "description": (
+                "count = đếm số sự kiện; list = liệt kê từng sự kiện kèm clip; "
+                "breakdown = thống kê theo nhóm; top_plates = biển số nhiều lượt nhất"
+            ),
+        },
+        "event_type": {
+            "type": "array",
+            "items": {"type": "string", "enum": [t.value for t in EventTypeKey]},
+        },
+        "object_class": {
+            "type": "array",
+            "items": {"type": "string", "enum": [o.value for o in ObjectClassKey]},
+        },
+        "tag_label": {
+            "type": "array",
+            "items": {"type": "string", "enum": [t.value for t in TagLabel]},
+        },
+        "min_severity": {"type": "integer", "description": "1..3, chỉ đặt khi hỏi mức nghiêm trọng"},
+        "license_plate": {"type": "string"},
+        "camera_id": {"type": "string"},
+        "time_range": {"type": "string", "enum": [t.value for t in TimeRange]},
+        "group_by": {"type": "string", "enum": [g.value for g in GroupBy]},
+        "limit": {"type": "integer"},
+        "offset": {"type": "integer", "description": "Bỏ qua N kết quả đầu, dùng cho 'còn nữa không'"},
+        "want_clips": {"type": "boolean"},
+    },
+    # `time_range` phải nằm trong required: khi để tùy chọn, mô hình hay bỏ trống
+    # trường này và spec rơi về mặc định "all" — câu hỏi "tháng này" khi đó bị trả
+    # lời bằng số liệu toàn bộ lịch sử. Bắt buộc chọn thì mô hình phải cân nhắc.
+    "required": ["metric", "time_range"],
+}
 
-    def where_clause(self, column: str = "e.timestamp") -> str:
-        if self.start is None:
-            return ""
-        return f" AND {column} >= :ts_start AND {column} < :ts_end"
+_SPEC_INSTRUCTIONS = f"""\
+Bạn là bộ phân tích ý định của trợ lý giám sát an ninh SentriAI (cảng/kho vận).
 
-    def params(self) -> dict:
-        if self.start is None:
-            return {}
-        # SQLAlchemy lưu DateTime của SQLite dạng chuỗi naive; bỏ tzinfo để so sánh
-        # cùng hệ quy chiếu với giá trị đã ghi.
-        return {
-            "ts_start": self.start.replace(tzinfo=None),
-            "ts_end": self.end.replace(tzinfo=None),
-        }
+Nhiệm vụ: đọc câu hỏi tiếng Việt của nhân viên trực ca và trả về DUY NHẤT một
+đối tượng JSON mô tả truy vấn cần chạy. Không viết SQL. Không giải thích.
+
+Ngữ nghĩa các trường:
+- metric: "count" cho "có bao nhiêu"; "list" cho "liệt kê / cho tôi xem / đưa tôi
+  N clip"; "breakdown" cho "loại nào nhiều nhất / phân bố theo"; "top_plates" cho
+  "biển số nào ra vào nhiều nhất".
+- event_type: "LPR_PASSAGE" = xe ra vào cổng, đọc biển số. "ZONE_VIOLATION" và
+  "RESTRICTED_ACCESS" = vi phạm khu vực cấm / xâm nhập. Hỏi về vi phạm thì đưa cả
+  hai giá trị này.
+- object_class: container=Container, truck=Xe tải, forklift=Xe nâng, crane=Xe cẩu,
+  car=Xe con, motorbike=Xe máy, bicycle=Xe đạp, person=Người.
+- tag_label: known=xe quen, unknown=xe lạ, blacklisted=xe trong danh sách đen.
+- min_severity: chỉ đặt khi câu hỏi nhắc tới mức nghiêm trọng (mức 3, nghiêm
+  trọng, nặng).
+- time_range: "hôm nay/bây giờ/hiện tại" -> today; "hôm qua" -> yesterday;
+  "tuần này/tuần qua/tuần rồi/7 ngày" -> week; "tháng này/tháng qua/tháng rồi/
+  30 ngày" -> month. Câu hỏi không nhắc thời gian thì để "all". Luôn đặt trường
+  này khi câu hỏi có nhắc mốc thời gian, đừng bỏ về "all".
+- limit: số kết quả người dùng muốn. "đưa tôi 2 clip" -> metric=list, limit=2.
+- offset: chỉ đặt >0 khi người dùng xin xem tiếp ("còn nữa không", "tiếp đi").
+- want_clips: true khi người dùng muốn xem clip/bằng chứng/video, và luôn true khi
+  câu hỏi nói về vi phạm hoặc cảnh báo (kể cả khi chỉ hỏi số lượng).
+
+Quy tắc bắt buộc:
+- Chủ đề cụ thể thì phải có bộ lọc tương ứng. Chỉ để mọi mảng rỗng khi người dùng
+  thật sự hỏi tổng số toàn bộ sự kiện.
+- Không bịa camera_id hay license_plate nếu câu hỏi không nêu.
+- limit không vượt quá {MAX_LIMIT}.
+
+Ví dụ:
+Câu hỏi: "Hôm nay có bao nhiêu xe lạ vào?"
+{{"metric":"count","event_type":["LPR_PASSAGE"],"tag_label":["unknown"],"time_range":"today"}}
+
+Câu hỏi: "Có vi phạm khu vực cấm nào không?"
+{{"metric":"count","event_type":["ZONE_VIOLATION","RESTRICTED_ACCESS"],"time_range":"all","want_clips":true}}
+
+Câu hỏi: "Đưa tôi 2 clip vi phạm"
+{{"metric":"list","event_type":["ZONE_VIOLATION","RESTRICTED_ACCESS"],"limit":2,"want_clips":true}}
+
+Câu hỏi: "Xe nâng hoạt động thế nào tuần này?"
+{{"metric":"count","object_class":["forklift"],"time_range":"week"}}
+
+Câu hỏi: "Loại xe nào vi phạm nhiều nhất tháng này?"
+{{"metric":"breakdown","event_type":["ZONE_VIOLATION","RESTRICTED_ACCESS"],"group_by":"object_class","time_range":"month"}}
+
+Câu hỏi: "Biển số nào ra vào nhiều nhất?"
+{{"metric":"top_plates","event_type":["LPR_PASSAGE"],"time_range":"all"}}
+"""
 
 
-def _resolve_time_scope(normalized: str, now: Optional[datetime] = None) -> TimeScope:
-    current = now or datetime.now(ICT_TZ)
-    midnight = current.replace(hour=0, minute=0, second=0, microsecond=0)
-
-    if "hom qua" in normalized:
-        return TimeScope("hôm qua", midnight - timedelta(days=1), midnight)
-    if "tuan" in normalized:
-        return TimeScope("7 ngày qua", midnight - timedelta(days=6), midnight + timedelta(days=1))
-    if "thang" in normalized:
-        return TimeScope("30 ngày qua", midnight - timedelta(days=29), midnight + timedelta(days=1))
-    if "hom nay" in normalized or "hien tai" in normalized:
-        return TimeScope("hôm nay", midnight, midnight + timedelta(days=1))
-    return TimeScope("toàn bộ dữ liệu đã ghi nhận", None, None)
-
-
-def _match_object_class(normalized: str) -> Optional[str]:
-    """Dò xem câu hỏi có nhắc tới một trong 8 lớp đối tượng chuẩn không."""
-    for class_key, vn_name in OBJECT_VIETNAMESE_NAMES.items():
-        if _strip_accents(vn_name) in normalized or class_key in normalized:
-            return class_key
-    return None
-
-
-@dataclass
-class Intent:
-    """Một quy tắc: điều kiện khớp, SQL tham số hóa, và cách dựng câu trả lời."""
-
-    name: str
-    matches: Callable[[str], bool]
-    build: Callable[[str, TimeScope], tuple]
-
-
-def _sanitize_llm_sql(raw: Optional[str]) -> Optional[str]:
+def _coerce_spec_payload(payload: Any) -> dict:
     """
-    Làm sạch và kiểm duyệt SQL do LLM trả về.
+    Gạn payload thô của LLM về đúng hình dạng `QuerySpec`.
 
-    Trả `None` nếu SQL không dùng được — caller phải hiểu đó là tín hiệu fallback,
-    không phải lỗi cần ném ra ngoài.
+    Lọc bớt giá trị lạ thay vì để Pydantic đánh trượt cả spec: một mảng
+    `object_class` có lẫn giá trị bịa vẫn còn dùng được phần hợp lệ, và đánh trượt
+    toàn bộ chỉ khiến trợ lý rơi xuống Rule Engine một cách không cần thiết.
     """
-    if not raw or not raw.strip():
-        return None
+    if not isinstance(payload, dict):
+        raise ValueError("payload không phải object JSON")
 
-    sql = raw.strip()
+    def _clean_enum_list(key: str, allowed: set[str], *, upper: bool = False) -> list[str]:
+        raw = payload.get(key) or []
+        if isinstance(raw, str):
+            raw = [raw]
+        if not isinstance(raw, list):
+            return []
+        out = []
+        for item in raw:
+            value = str(item).strip()
+            value = value.upper() if upper else value.lower()
+            if value in allowed and value not in out:
+                out.append(value)
+        return out
 
-    # Model hay bọc kết quả trong ```sql ... ``` dù prompt đã dặn không.
-    if sql.startswith("```"):
-        sql = re.sub(r"^```[a-zA-Z]*\s*", "", sql)
-        sql = re.sub(r"\s*```$", "", sql).strip()
+    cleaned: dict[str, Any] = {
+        "event_type": _clean_enum_list(
+            "event_type", {t.value for t in EventTypeKey}, upper=True
+        ),
+        "object_class": _clean_enum_list("object_class", {o.value for o in ObjectClassKey}),
+        "tag_label": _clean_enum_list("tag_label", {t.value for t in TagLabel}),
+    }
 
-    if not _SINGLE_SELECT_RE.match(sql):
-        logger.warning("SQL từ LLM không phải một câu SELECT đơn, bỏ qua")
-        return None
-    if _FORBIDDEN_SQL.search(sql):
-        logger.warning("SQL từ LLM chạm chốt an toàn _FORBIDDEN_SQL, bỏ qua")
-        return None
+    metric = str(payload.get("metric", "")).strip().lower()
+    cleaned["metric"] = metric if metric in {m.value for m in Metric} else Metric.COUNT.value
 
-    sql = sql.rstrip(";").strip()
+    time_range = str(payload.get("time_range", "")).strip().lower()
+    if time_range in {t.value for t in TimeRange}:
+        cleaned["time_range"] = time_range
 
-    # Prompt đã yêu cầu LIMIT nhưng không thể tin model luôn tuân thủ.
-    if not re.search(r"\bLIMIT\b", sql, re.IGNORECASE):
-        sql = f"{sql}\nLIMIT {_LLM_ROW_LIMIT}"
-    return sql
+    group_by = str(payload.get("group_by", "")).strip().lower()
+    if group_by in {g.value for g in GroupBy}:
+        cleaned["group_by"] = group_by
+
+    severity = payload.get("min_severity")
+    if isinstance(severity, (int, float)) and 1 <= int(severity) <= 3:
+        cleaned["min_severity"] = int(severity)
+
+    for key in ("license_plate", "camera_id"):
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            cleaned[key] = value.strip()
+
+    limit = payload.get("limit")
+    if isinstance(limit, (int, float)) and int(limit) >= 1:
+        cleaned["limit"] = min(int(limit), MAX_LIMIT)
+
+    offset = payload.get("offset")
+    if isinstance(offset, (int, float)) and int(offset) >= 0:
+        cleaned["offset"] = int(offset)
+
+    if isinstance(payload.get("want_clips"), bool):
+        cleaned["want_clips"] = payload["want_clips"]
+
+    return cleaned
 
 
-def _is_number(value: Any) -> bool:
-    return isinstance(value, (int, float)) and not isinstance(value, bool)
-
-
-def _rows_have_data(rows: Sequence[Any]) -> bool:
+class GeminiSpecGenerator:
     """
-    Kết quả có phản ánh sự kiện có thật không?
-
-    Một dòng aggregate toàn số 0 (`COUNT(*) = 0`) về mặt kỹ thuật là "có dòng"
-    nhưng về mặt nghiệp vụ là *không có sự kiện nào* — nên không được kèm clip
-    bằng chứng cho nó.
-    """
-    if not rows:
-        return False
-    for row in rows:
-        for value in row._mapping.values():
-            if value is None:
-                continue
-            if _is_number(value):
-                if value != 0:
-                    return True
-            else:
-                return True
-    return False
-
-
-def _humanize_alias(alias: str) -> str:
-    """`camera_count` -> `camera count`: bí danh SQL đọc được trong câu trả lời."""
-    return str(alias).replace("_", " ").strip() or "giá trị"
-
-
-def _fmt_value(value: Any) -> str:
-    if value is None:
-        return "không có"
-    if isinstance(value, float):
-        return f"{value:.2f}".rstrip("0").rstrip(".")
-    return str(value)
-
-
-def _render_llm_rows(rows: Sequence[Any]) -> Optional[str]:
-    """
-    Dựng câu trả lời tiếng Việt tự nhiên từ tập kết quả có hình dạng bất kỳ.
-
-    Cách diễn giải chỉ dựa vào *hình dạng kết quả và bí danh cột*, không dựa vào
-    câu hỏi gốc: SQL do LLM sinh ra mới là thứ quyết định con số, nên diễn giải
-    theo câu hỏi sẽ có nguy cơ gán nhãn sai cho dữ liệu.
-    """
-    if not rows:
-        return "Không có dữ liệu nào phù hợp với yêu cầu của bạn."
-
-    if not _rows_have_data(rows):
-        return "Không có sự kiện nào phù hợp với yêu cầu của bạn."
-
-    def describe(row) -> str:
-        mapping = row._mapping
-        parts = [f"{_humanize_alias(key)}: {_fmt_value(val)}" for key, val in mapping.items()]
-        return ", ".join(parts)
-
-    if len(rows) == 1:
-        mapping = rows[0]._mapping
-        if len(mapping) == 1:
-            value = next(iter(mapping.values()))
-            if _is_number(value):
-                # Truy vấn tổng hợp một ô: dạng câu hỏi "bao nhiêu" phổ biến nhất.
-                return (
-                    f"Ghi nhận {_fmt_value(value)} sự kiện phù hợp với yêu cầu của bạn "
-                    "trong dữ liệu giám sát đã lưu."
-                )
-            return f"Kết quả tôi tra được là: {_fmt_value(value)}."
-        return f"Kết quả tra cứu — {describe(rows[0])}."
-
-    shown = [f"• {describe(r)}" for r in rows[:5]]
-    header = f"Tôi tìm thấy {len(rows)} kết quả phù hợp"
-    if len(rows) > 5:
-        header += " (hiển thị 5 kết quả đầu)"
-    return header + ":\n" + "\n".join(shown)
-
-
-class GeminiSqlGenerator:
-    """
-    Sinh SQL bằng Google Gemini (ADR-004).
+    Sinh `QuerySpec` bằng Google Gemini ở chế độ structured output.
 
     Mọi lỗi đều được nuốt và quy về `None` để `LLMQAAgent` rơi xuống Rule Engine:
     trợ lý không được chết chỉ vì nhà cung cấp LLM có sự cố.
@@ -371,22 +318,82 @@ class GeminiSqlGenerator:
         self._client = genai.Client(api_key=self.api_key)
         return self._client
 
-    def generate_sql(self, user_query: str, now: Optional[datetime] = None) -> Optional[str]:
+    def _build_prompt(
+        self,
+        user_query: str,
+        *,
+        now: datetime,
+        history: Optional[Sequence[dict]] = None,
+        previous_spec: Optional[dict] = None,
+        correction: Optional[str] = None,
+    ) -> str:
+        parts = [
+            _SPEC_INSTRUCTIONS,
+            f"Mốc thời gian hiện tại: {now.strftime('%Y-%m-%d %H:%M:%S')} (giờ Việt Nam, UTC+7).",
+        ]
+
+        if history:
+            lines = []
+            for turn in history[-4:]:
+                role = "Người dùng" if turn.get("role") == "user" else "Trợ lý"
+                content = str(turn.get("text") or "").strip().replace("\n", " ")
+                if content:
+                    lines.append(f"{role}: {content[:200]}")
+            if lines:
+                parts.append(
+                    "Ngữ cảnh hội thoại gần đây (dùng để hiểu câu hỏi rút gọn như "
+                    '"còn nữa không", "lọc theo camera cổng"):\n' + "\n".join(lines)
+                )
+
+        if previous_spec:
+            parts.append(
+                "Truy vấn của lượt trước (JSON). Nếu câu hỏi mới là câu hỏi tiếp nối, "
+                "hãy sửa đổi truy vấn này thay vì dựng lại từ đầu:\n"
+                + json.dumps(previous_spec, ensure_ascii=False)
+            )
+
+        if correction:
+            parts.append(
+                "Lần trả lời trước của bạn không dùng được: "
+                f"{correction}\nHãy trả lại JSON đúng schema."
+            )
+
+        parts.append(f"Câu hỏi: {user_query}\nJSON:")
+        return "\n\n".join(parts)
+
+    def generate_spec(
+        self,
+        user_query: str,
+        *,
+        now: Optional[datetime] = None,
+        history: Optional[Sequence[dict]] = None,
+        previous_spec: Optional[dict] = None,
+        correction: Optional[str] = None,
+    ) -> Optional[QuerySpec]:
         if not self.available():
             return None
 
-        current = now or datetime.now(ICT_TZ)
-        prompt = _LLM_INSTRUCTIONS.format(
-            schema=_SCHEMA_PROMPT,
-            now=current.strftime("%Y-%m-%d %H:%M:%S"),
+        prompt = self._build_prompt(
+            user_query,
+            now=now or datetime.now(ICT_TZ),
+            history=history,
+            previous_spec=previous_spec,
+            correction=correction,
         )
         try:
+            from google.genai import types
+
             client = self._get_client()
             response = client.models.generate_content(
                 model=self.model,
-                contents=f"{prompt}\n\nCâu hỏi: {user_query}\nSQL:",
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    response_schema=_SPEC_JSON_SCHEMA,
+                    temperature=0.0,
+                ),
             )
-            return _sanitize_llm_sql(getattr(response, "text", None))
+            raw = getattr(response, "text", None)
         except ImportError:
             logger.warning("Chưa cài `google-genai`; dùng Rule Engine thay thế")
             return None
@@ -394,266 +401,329 @@ class GeminiSqlGenerator:
             logger.exception("Gọi Gemini thất bại; dùng Rule Engine thay thế")
             return None
 
+        return self.parse_spec(raw)
+
+    @staticmethod
+    def parse_spec(raw: Optional[str]) -> Optional[QuerySpec]:
+        """Chuỗi JSON thô -> `QuerySpec`. Trả `None` khi không dùng được."""
+        if not raw or not str(raw).strip():
+            return None
+
+        text_value = str(raw).strip()
+        # Model đôi khi vẫn bọc kết quả trong ```json ... ``` dù đã bật JSON mode.
+        if text_value.startswith("```"):
+            text_value = re.sub(r"^```[a-zA-Z]*\s*", "", text_value)
+            text_value = re.sub(r"\s*```$", "", text_value).strip()
+
+        try:
+            payload = json.loads(text_value)
+        except (ValueError, TypeError):
+            logger.warning("Gemini không trả về JSON hợp lệ, bỏ qua")
+            return None
+
+        # Một số phiên bản trả về mảng chứa đúng một object.
+        if isinstance(payload, list) and len(payload) == 1:
+            payload = payload[0]
+
+        try:
+            return QuerySpec.model_validate(_coerce_spec_payload(payload))
+        except Exception:
+            logger.warning("JSON của Gemini không khớp QuerySpec, bỏ qua", exc_info=True)
+            return None
+
+
+# ------------------------------------------------------------------ Rule Engine
+
+_OBJECT_CLASS_KEYWORDS = {
+    ObjectClassKey.CONTAINER: ("container", "thung hang"),
+    ObjectClassKey.TRUCK: ("xe tai", "xe container", "truck"),
+    ObjectClassKey.FORKLIFT: ("xe nang", "forklift"),
+    ObjectClassKey.CRANE: ("xe cau", "can cau", "crane"),
+    ObjectClassKey.CAR: ("xe con", "xe hoi", "o to", "car"),
+    ObjectClassKey.MOTORBIKE: ("xe may", "mo to", "motorbike"),
+    ObjectClassKey.BICYCLE: ("xe dap", "bicycle"),
+    ObjectClassKey.PERSON: ("nguoi", "cong nhan", "person"),
+}
+
+_VIOLATION_KEYWORDS = ("vi pham", "xam nhap", "khu vuc cam", "canh bao", "muc 3", "nghiem trong")
+_GATE_KEYWORDS = ("ra vao", "qua cong", "vao cong", "ra cong", "bien so", "bien kiem soat", "lpr")
+_LIST_KEYWORDS = ("liet ke", "cho toi xem", "dua toi", "xem clip", "clip", "video", "bang chung")
+_MORE_KEYWORDS = ("con nua", "con khong", "tiep di", "tiep theo", "xem them", "con gi nua")
+
+# "loại nào", "loại xe nào", "loại phương tiện nào" — cùng một ý định thống kê.
+# Dùng regex thay vì danh sách chuỗi cố định vì phần đệm ở giữa quá nhiều biến thể.
+_BREAKDOWN_RE = re.compile(
+    r"(loai\s+(?:\w+\s+){0,2}nao|camera\s+nao|ngay\s+nao"
+    r"|phan bo|thong ke theo|nhom theo|theo camera|theo ngay|theo loai)"
+)
+
+
+def _extract_leading_count(normalized: str) -> Optional[int]:
+    """"đưa tôi 2 clip" -> 2. Chỉ nhận số nhỏ để không nuốt nhầm biển số."""
+    match = re.search(r"\b(\d{1,2})\s*(clip|video|su kien|ket qua|cai|dong)", normalized)
+    if match:
+        return max(1, min(int(match.group(1)), MAX_LIMIT))
+    return None
+
+
+def _resolve_time_range(normalized: str) -> TimeRange:
+    if "hom qua" in normalized:
+        return TimeRange.YESTERDAY
+    if "tuan" in normalized:
+        return TimeRange.WEEK
+    if "thang" in normalized:
+        return TimeRange.MONTH
+    if "hom nay" in normalized or "hien tai" in normalized:
+        return TimeRange.TODAY
+    return TimeRange.ALL
+
+
+def rule_spec_from_question(
+    normalized: str, previous_spec: Optional[QuerySpec] = None
+) -> QuerySpec:
+    """
+    Nhánh dự phòng: dựng `QuerySpec` bằng từ khóa tiếng Việt, không cần mạng.
+
+    Trả về *cùng kiểu* với nhánh LLM, nên toàn bộ phần biên dịch, diễn giải và
+    gắn clip phía sau chỉ có một đường chạy duy nhất.
+    """
+    # "còn nữa không" là câu hỏi tiếp nối: giữ nguyên bộ lọc cũ, chỉ đẩy offset.
+    if previous_spec is not None and any(k in normalized for k in _MORE_KEYWORDS):
+        return previous_spec.model_copy(
+            update={
+                "metric": Metric.LIST,
+                "offset": previous_spec.offset + previous_spec.limit,
+                "want_clips": True,
+            }
+        )
+
+    fields: dict[str, Any] = {"time_range": _resolve_time_range(normalized)}
+
+    if any(k in normalized for k in _VIOLATION_KEYWORDS):
+        fields["event_type"] = [EventTypeKey.ZONE_VIOLATION, EventTypeKey.RESTRICTED_ACCESS]
+        # Câu hỏi về vi phạm luôn cần bằng chứng, kể cả khi chỉ hỏi số lượng:
+        # "có 12 vi phạm" mà không xem được clip nào thì không dùng để xử lý ca trực.
+        fields["want_clips"] = True
+    elif any(k in normalized for k in _GATE_KEYWORDS):
+        fields["event_type"] = [EventTypeKey.LPR_PASSAGE]
+
+    if "muc 3" in normalized or "nghiem trong" in normalized:
+        fields["min_severity"] = 3
+
+    if "xe quen" in normalized:
+        fields["tag_label"] = [TagLabel.KNOWN]
+    elif "danh sach den" in normalized:
+        fields["tag_label"] = [TagLabel.BLACKLISTED]
+    elif "xe la" in normalized or "bien so la" in normalized:
+        fields["tag_label"] = [TagLabel.UNKNOWN]
+
+    # Nhãn quen/lạ/danh sách đen gắn với biển số, mà biển số chỉ đọc được ở cổng.
+    # Không chốt lại event_type thì câu trả lời hiện ra là "sự kiện" chung chung
+    # trong khi người hỏi đang nói về lượt xe ra vào.
+    if "tag_label" in fields and "event_type" not in fields:
+        fields["event_type"] = [EventTypeKey.LPR_PASSAGE]
+
+    # Bộ lọc loại đối tượng chỉ áp khi câu hỏi *không* nói về nhóm biển số: "xe lạ"
+    # là thuộc tính đăng ký, không phải lớp thị giác.
+    if "tag_label" not in fields:
+        for class_key, keywords in _OBJECT_CLASS_KEYWORDS.items():
+            if any(k in normalized for k in keywords):
+                fields["object_class"] = [class_key]
+                break
+
+    requested = _extract_leading_count(normalized)
+    if _BREAKDOWN_RE.search(normalized):
+        fields["metric"] = Metric.BREAKDOWN
+        if "camera" in normalized:
+            fields["group_by"] = GroupBy.CAMERA
+        elif "ngay" in normalized:
+            fields["group_by"] = GroupBy.DAY
+        else:
+            fields["group_by"] = GroupBy.OBJECT_CLASS
+    elif "bien so nao" in normalized or "bien so ra vao" in normalized:
+        fields["metric"] = Metric.TOP_PLATES
+    elif requested is not None or any(k in normalized for k in _LIST_KEYWORDS):
+        fields["metric"] = Metric.LIST
+        fields["limit"] = requested or 5
+    else:
+        fields["metric"] = Metric.COUNT
+
+    return QuerySpec(**fields)
+
+
+# ----------------------------------------------------------------------- agent
+
+
+def _clip_label(row: Any) -> str:
+    mapping = row._mapping
+    bits = [class_display_name(mapping.get("lop_doi_tuong"))]
+    if mapping.get("bien_so"):
+        bits.append(str(mapping["bien_so"]))
+    if mapping.get("khu_vuc"):
+        bits.append(str(mapping["khu_vuc"]))
+    elif mapping.get("camera"):
+        bits.append(str(mapping["camera"]))
+    return " · ".join(bits)
+
+
+def _collect_clips(rows: Sequence[Any]) -> list[dict]:
+    """
+    Dựng danh sách clip bằng chứng từ các dòng kết quả.
+
+    Khử trùng lặp theo URL: nhiều sự kiện khác nhau vẫn có thể trỏ về cùng một
+    file video nguồn, và hiển thị hai trình phát y hệt nhau chỉ làm người xem
+    tưởng trợ lý đang lặp lại chính nó.
+    """
+    clips: list[dict] = []
+    seen: set[str] = set()
+    for row in rows:
+        mapping = row._mapping
+        url = mapping.get("clip_url")
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        timestamp = mapping.get("thoi_diem")
+        clips.append(
+            {
+                "event_id": mapping.get("event_id"),
+                "url": url,
+                "timestamp": timestamp.isoformat() if isinstance(timestamp, datetime) else str(timestamp or ""),
+                "camera": mapping.get("camera"),
+                "label": _clip_label(row),
+            }
+        )
+        if len(clips) >= MAX_CLIPS:
+            break
+    return clips
+
 
 class LLMQAAgent:
-    """
-    LLM Text-to-SQL Assistant Engine & Fallback Rule Engine (ADR-004).
-    """
+    """Trợ lý hỏi đáp sự kiện (ADR-004 rev.2)."""
 
-    def __init__(self, llm: Optional[GeminiSqlGenerator] = None):
-        self._intents = self._build_intents()
-        self._llm = llm if llm is not None else GeminiSqlGenerator()
+    def __init__(self, llm: Optional[GeminiSpecGenerator] = None):
+        self._llm = llm if llm is not None else GeminiSpecGenerator()
         logger.info(
-            "Initialized LLMQAAgent (llm=%s, model=%s, %d rule intents)",
+            "Initialized LLMQAAgent (llm=%s, model=%s)",
             "on" if self._llm.available() else "off",
             self._llm.model,
-            len(self._intents),
         )
 
-    # ------------------------------------------------------------------ intents
+    # ------------------------------------------------------------- sinh spec
 
-    def _build_intents(self) -> Sequence[Intent]:
-        return (
-            Intent("vehicle_by_tag", self._is_vehicle_tag_question, self._build_vehicle_tag_query),
-            Intent("zone_violation", self._is_violation_question, self._build_violation_query),
-            Intent("object_class", self._is_object_class_question, self._build_object_class_query),
-            Intent("plate_lookup", self._is_plate_question, self._build_plate_query),
-            Intent("event_count", lambda _: True, self._build_event_count_query),
-        )
-
-    @staticmethod
-    def _is_vehicle_tag_question(normalized: str) -> bool:
-        return any(k in normalized for k in ("xe la", "xe quen", "danh sach den", "bien so la"))
-
-    @staticmethod
-    def _is_violation_question(normalized: str) -> bool:
-        return any(
-            k in normalized
-            for k in ("vi pham", "xam nhap", "khu vuc cam", "canh bao", "muc 3", "nghiem trong")
-        )
-
-    @staticmethod
-    def _is_object_class_question(normalized: str) -> bool:
-        return _match_object_class(normalized) is not None
-
-    @staticmethod
-    def _is_plate_question(normalized: str) -> bool:
-        return any(k in normalized for k in ("bien so", "bien kiem soat"))
-
-    # ------------------------------------------------------------- query builds
-
-    def _build_vehicle_tag_query(self, normalized: str, scope: TimeScope) -> tuple:
-        if "xe quen" in normalized:
-            tag = "known"
-        elif "danh sach den" in normalized:
-            tag = "blacklisted"
-        else:
-            tag = "unknown"
-
-        sql = (
-            "SELECT COUNT(DISTINCT e.license_plate) AS plate_count, COUNT(*) AS event_count\n"
-            "FROM events e\n"
-            "JOIN vehicles v ON v.license_plate = e.license_plate\n"
-            "WHERE v.tag_label = :tag" + scope.where_clause()
-        )
-        params = {"tag": tag, **scope.params()}
-
-        def render(rows):
-            row = rows[0] if rows else None
-            plates = (row.plate_count if row else 0) or 0
-            events = (row.event_count if row else 0) or 0
-            if plates == 0:
-                return f"Không có {_TAG_LABEL_VN[tag]} nào được ghi nhận trong {scope.label}."
-            return (
-                f"Ghi nhận {plates} {_TAG_LABEL_VN[tag]} khác nhau "
-                f"qua {events} lượt trong {scope.label}."
-            )
-
-        return sql, params, render, {"tag": tag}
-
-    def _build_violation_query(self, normalized: str, scope: TimeScope) -> tuple:
-        only_severe = "muc 3" in normalized or "nghiem trong" in normalized
-        severity_clause = " AND e.severity_level = 3" if only_severe else ""
-
-        sql = (
-            "SELECT COUNT(*) AS total, MAX(e.severity_level) AS max_severity\n"
-            "FROM events e\n"
-            "WHERE e.event_type IN ('ZONE_VIOLATION', 'RESTRICTED_ACCESS')"
-            + severity_clause
-            + scope.where_clause()
-        )
-        params = dict(scope.params())
-
-        def render(rows):
-            row = rows[0] if rows else None
-            total = (row.total if row else 0) or 0
-            if total == 0:
-                return f"Không có vi phạm khu vực nào trong {scope.label}."
-            max_sev = (row.max_severity if row else None) or 0
-            sev_text = _SEVERITY_VN.get(max_sev, f"Mức {max_sev}")
-            prefix = "vi phạm Mức 3" if only_severe else "vi phạm khu vực"
-            return (
-                f"Ghi nhận {total} {prefix} trong {scope.label}. "
-                f"Mức nghiêm trọng cao nhất: {sev_text}."
-            )
-
-        clip_filter = (
-            "e.event_type IN ('ZONE_VIOLATION', 'RESTRICTED_ACCESS')" + severity_clause
-        )
-        return sql, params, render, {"clip_filter": clip_filter}
-
-    def _build_object_class_query(self, normalized: str, scope: TimeScope) -> tuple:
-        class_key = _match_object_class(normalized) or "person"
-        vn_name = OBJECT_VIETNAMESE_NAMES.get(class_key, class_key)
-
-        sql = (
-            "SELECT COUNT(*) AS total, COUNT(DISTINCT e.camera_id) AS camera_count\n"
-            "FROM events e\n"
-            "WHERE e.object_class = :object_class" + scope.where_clause()
-        )
-        params = {"object_class": class_key, **scope.params()}
-
-        def render(rows):
-            row = rows[0] if rows else None
-            total = (row.total if row else 0) or 0
-            if total == 0:
-                return f"Không ghi nhận hoạt động nào của {vn_name} trong {scope.label}."
-            cameras = (row.camera_count if row else 0) or 0
-            return (
-                f"{vn_name} xuất hiện trong {total} sự kiện "
-                f"trên {cameras} camera, tính trong {scope.label}."
-            )
-
-        return sql, params, render, {"clip_filter": "e.object_class = :object_class"}
-
-    def _build_plate_query(self, normalized: str, scope: TimeScope) -> tuple:
-        sql = (
-            "SELECT e.license_plate AS plate, COUNT(*) AS total\n"
-            "FROM events e\n"
-            "WHERE e.license_plate IS NOT NULL" + scope.where_clause() + "\n"
-            "GROUP BY e.license_plate\n"
-            "ORDER BY total DESC, plate ASC\n"
-            "LIMIT 5"
-        )
-        params = dict(scope.params())
-
-        def render(rows):
-            if not rows:
-                return f"Chưa đọc được biển số nào trong {scope.label}."
-            listed = ", ".join(f"{r.plate} ({r.total} lượt)" for r in rows)
-            return f"Biển số ghi nhận nhiều nhất trong {scope.label}: {listed}."
-
-        return sql, params, render, {"clip_filter": "e.license_plate IS NOT NULL"}
-
-    def _build_event_count_query(self, normalized: str, scope: TimeScope) -> tuple:
-        sql = (
-            "SELECT COUNT(*) AS total, COUNT(DISTINCT e.camera_id) AS camera_count\n"
-            "FROM events e\n"
-            "WHERE 1 = 1" + scope.where_clause()
-        )
-        params = dict(scope.params())
-
-        def render(rows):
-            row = rows[0] if rows else None
-            total = (row.total if row else 0) or 0
-            if total == 0:
-                return f"Chưa có sự kiện nào được ghi nhận trong {scope.label}."
-            cameras = (row.camera_count if row else 0) or 0
-            return f"Hệ thống đã ghi nhận {total} sự kiện trên {cameras} camera trong {scope.label}."
-
-        return sql, params, render, {}
-
-    # ---------------------------------------------------------------- execution
-
-    def _latest_clip_url(
-        self, session: Session, scope: TimeScope, extra: dict, params: dict
-    ) -> Optional[str]:
-        """
-        Lấy clip bằng chứng của sự kiện khớp gần nhất — chỉ trả URL có thật trong CSDL.
-
-        Không bịa đường dẫn mặc định: câu trả lời không có bằng chứng thì
-        `clip_url` phải là None để UI hiển thị đúng trạng thái đó.
-        """
-        clip_filter = extra.get("clip_filter")
-        where = "e.video_clip_url IS NOT NULL AND e.video_clip_url <> ''"
-        if clip_filter:
-            where += f" AND {clip_filter}"
-        if extra.get("tag"):
-            where += (
-                " AND e.license_plate IN"
-                " (SELECT v.license_plate FROM vehicles v WHERE v.tag_label = :tag)"
-            )
-
-        sql = (
-            "SELECT e.video_clip_url AS clip\n"
-            "FROM events e\n"
-            f"WHERE {where}" + scope.where_clause() + "\n"
-            "ORDER BY e.timestamp DESC\n"
-            "LIMIT 1"
-        )
+    def _spec_from_llm(
+        self,
+        user_query: str,
+        *,
+        history: Optional[Sequence[dict]],
+        previous_spec: Optional[dict],
+    ) -> Optional[QuerySpec]:
+        """Gọi LLM, thử lại đúng một lần khi output không dựng được spec."""
         try:
-            row = session.execute(text(sql), params).fetchone()
+            spec = self._llm.generate_spec(
+                user_query, history=history, previous_spec=previous_spec
+            )
+            if spec is not None:
+                return spec
+            if not self._llm.available():
+                return None
+            logger.info("QA: spec lượt 1 không hợp lệ, thử lại một lần")
+            return self._llm.generate_spec(
+                user_query,
+                history=history,
+                previous_spec=previous_spec,
+                correction="JSON không parse được hoặc không khớp schema QuerySpec.",
+            )
         except Exception:
-            logger.exception("Không truy vấn được clip bằng chứng")
-            return None
-        return row.clip if row else None
-
-    def _try_llm_branch(
-        self, user_query: str, session: Session, scope: TimeScope
-    ) -> Optional[dict]:
-        """
-        Nhánh 1 của ADR-004. Trả `None` ở mọi điều kiện fallback đã quy định.
-        """
-        try:
-            sql = self._llm.generate_sql(user_query)
-        except Exception:
-            # GeminiSqlGenerator đã tự nuốt lỗi, nhưng generator có thể được thay
+            # GeminiSpecGenerator đã tự nuốt lỗi, nhưng generator có thể được thay
             # bằng cài đặt khác; không để lỗi provider làm hỏng cả câu trả lời.
-            logger.exception("Generator SQL ném lỗi; chuyển sang Rule Engine")
-            return None
-        if not sql:
+            logger.exception("Generator spec ném lỗi; chuyển sang Rule Engine")
             return None
 
-        try:
-            rows = session.execute(text(sql)).fetchall()
-        except Exception:
-            # SQL sinh ra sai cột/sai cú pháp là chuyện bình thường với LLM;
-            # rollback để session còn dùng được cho nhánh Rule Engine phía sau.
-            logger.exception("SQL từ Gemini chạy lỗi; chuyển sang Rule Engine")
-            session.rollback()
-            return None
+    # ------------------------------------------------------------- thực thi
 
-        answer = _render_llm_rows(rows)
-        if answer is None:
-            return None
+    def _broaden_hint(self, spec: QuerySpec, session: Session) -> str:
+        """
+        Kết quả rỗng vì *khung thời gian*, hay vì thật sự không có dữ liệu?
 
-        # Clip bằng chứng chỉ có nghĩa khi truy vấn thật sự trả về sự kiện; gắn
-        # clip vào một câu trả lời "không có gì" là bịa bằng chứng.
-        clip_url = (
-            self._latest_clip_url(session, scope, {}, scope.params())
-            if _rows_have_data(rows)
-            else None
+        Trả lời "không có gì" khi dữ liệu chỉ nằm ngoài cửa sổ thời gian là đúng
+        nhưng vô ích. Câu gợi ý này được dựng bằng một truy vấn đếm xác định, không
+        gọi thêm LLM — nới bộ lọc bằng LLM có nguy cơ đổi luôn ý nghĩa câu hỏi.
+        """
+        if spec.time_range is TimeRange.ALL:
+            return ""
+
+        probe = compile_spec(
+            spec.model_copy(update={"metric": Metric.COUNT, "time_range": TimeRange.ALL})
         )
-        logger.info("QA branch=llm model=%s", self._llm.model)
-        return {"answer": answer, "sql_query": sql, "clip_url": clip_url}
+        try:
+            row = session.execute(text(probe.sql), probe.params).fetchone()
+        except Exception:
+            logger.exception("Không chạy được truy vấn đối chứng khoảng thời gian")
+            session.rollback()
+            return ""
 
-    def answer_question(self, user_query: str, session: Optional[Session] = None) -> dict:
+        total = (row._mapping.get("so_su_kien") if row is not None else 0) or 0
+        if not total:
+            return ""
+        return (
+            f" Trên toàn bộ dữ liệu đã ghi nhận thì có {total} sự kiện như vậy — "
+            "bạn có thể hỏi lại theo tuần hoặc tháng."
+        )
+
+    def _run(self, compiled: CompiledQuery, session: Session) -> dict:
+        spec = compiled.spec
+        rows = session.execute(text(compiled.sql), compiled.params).fetchall()
+        answer = render_answer(spec, rows, compiled.scope)
+
+        clips: list[dict] = []
+        if rows_have_data(spec, rows):
+            if spec.metric is Metric.LIST:
+                clips = _collect_clips(rows)
+            elif compiled.evidence_sql:
+                evidence_rows = session.execute(
+                    text(compiled.evidence_sql), compiled.params
+                ).fetchall()
+                clips = _collect_clips(evidence_rows)
+        else:
+            answer += self._broaden_hint(spec, session)
+
+        return {
+            "answer": answer,
+            "sql_query": compiled.sql,
+            "clips": clips,
+            # Giữ lại trường cũ cho client chưa cập nhật; luôn là clip đầu tiên.
+            "clip_url": clips[0]["url"] if clips else None,
+            "spec": spec.model_dump(mode="json"),
+        }
+
+    def answer_question(
+        self,
+        user_query: str,
+        session: Optional[Session] = None,
+        *,
+        history: Optional[Sequence[dict]] = None,
+        previous_spec: Optional[dict] = None,
+    ) -> dict:
         """
         Trả lời câu hỏi tiếng Việt bằng SQL thật chạy trên CSDL sự kiện.
 
-        Thử nhánh LLM trước, rơi xuống Rule Engine khi nhánh LLM không dùng được
-        (ADR-004). Trả về dict đúng `QueryResponse`: `answer`, `sql_query`,
-        `clip_url`. `sql_query` là chính câu lệnh đã được thực thi.
+        Thử nhánh LLM trước, rơi xuống Rule Engine khi nhánh LLM không dùng được.
+        Trả về dict đúng `QueryResponse`: `answer`, `sql_query`, `clips`,
+        `clip_url`, `spec`.
         """
         normalized = _strip_accents(user_query or "")
 
         # Chặn trước cả hai nhánh: câu chào hỏi không có ý định truy vấn dữ liệu,
-        # nên không mở session, không sinh SQL và không kèm clip bằng chứng.
+        # nên không mở session, không sinh spec và không kèm clip bằng chứng.
         if _is_chitchat(normalized):
             logger.info("QA branch=chitchat")
-            return {"answer": _CHITCHAT_ANSWER, "sql_query": None, "clip_url": None}
-
-        scope = _resolve_time_scope(normalized)
+            return {
+                "answer": _CHITCHAT_ANSWER,
+                "sql_query": None,
+                "clips": [],
+                "clip_url": None,
+                "spec": None,
+            }
 
         owns_session = session is None
         if owns_session:
@@ -661,46 +731,42 @@ class LLMQAAgent:
 
             session = SessionLocal()
         try:
-            llm_result = self._try_llm_branch(user_query, session, scope)
-            if llm_result is not None:
-                return llm_result
-            return self._answer_with_rules(normalized, scope, session)
+            spec = self._spec_from_llm(
+                user_query, history=history, previous_spec=previous_spec
+            )
+            branch = "llm"
+            if spec is None:
+                previous = None
+                if previous_spec:
+                    try:
+                        previous = QuerySpec.model_validate(_coerce_spec_payload(previous_spec))
+                    except Exception:
+                        previous = None
+                spec = rule_spec_from_question(normalized, previous_spec=previous)
+                branch = "rules"
+
+            compiled = compile_spec(spec)
+            try:
+                result = self._run(compiled, session)
+            except Exception as exc:
+                logger.exception("Thực thi truy vấn thất bại (branch=%s)", branch)
+                session.rollback()
+                return {
+                    "answer": f"Không truy vấn được dữ liệu sự kiện: {exc}",
+                    "sql_query": compiled.sql,
+                    "clips": [],
+                    "clip_url": None,
+                    "spec": spec.model_dump(mode="json"),
+                }
+
+            logger.info(
+                "QA branch=%s metric=%s scope=%s clips=%d",
+                branch,
+                spec.metric.value,
+                compiled.scope.label,
+                len(result["clips"]),
+            )
+            return result
         finally:
             if owns_session:
                 session.close()
-
-    def _answer_with_rules(
-        self, normalized: str, scope: TimeScope, session: Session
-    ) -> dict:
-        """Nhánh 2 của ADR-004: Rule Engine tiếng Việt với SQL tham số hóa tĩnh."""
-        intent = next(i for i in self._intents if i.matches(normalized))
-        sql, params, render, extra = intent.build(normalized, scope)
-
-        if _FORBIDDEN_SQL.search(sql):
-            # Không thể xảy ra với các mẫu tĩnh ở trên, nhưng giữ chốt này như lớp
-            # phòng vệ cuối nếu ai đó sửa mẫu SQL trong tương lai.
-            logger.error("Chặn câu lệnh không phải SELECT từ intent %s", intent.name)
-            return {
-                "answer": "Trợ lý chỉ được phép truy vấn dữ liệu, không thể thực hiện yêu cầu này.",
-                "sql_query": None,
-                "clip_url": None,
-            }
-
-        try:
-            rows = session.execute(text(sql), params).fetchall()
-            answer = render(rows)
-            clip_url = (
-                self._latest_clip_url(session, scope, extra, params)
-                if _rows_have_data(rows)
-                else None
-            )
-        except Exception as exc:
-            logger.exception("Text-to-SQL thất bại cho intent %s", intent.name)
-            return {
-                "answer": f"Không truy vấn được dữ liệu sự kiện: {exc}",
-                "sql_query": sql,
-                "clip_url": None,
-            }
-
-        logger.info("QA branch=rules intent=%s scope=%s", intent.name, scope.label)
-        return {"answer": answer, "sql_query": sql, "clip_url": clip_url}

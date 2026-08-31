@@ -6,7 +6,7 @@ from typing import Generator
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker, Session, declarative_base
 from backend.app.core.config import settings
-from backend.database.migrations import apply_cr004_migration
+from backend.database.migrations import apply_cr004_migration, apply_cr005_migration
 
 Base = declarative_base()
 
@@ -81,6 +81,7 @@ def init_db(schema_sql_path: str = "docs/contracts/db/schema.sql", target_engine
             cursor.execute("PRAGMA foreign_keys=ON;")
             raw_conn.commit()
             apply_cr004_migration(raw_conn)
+            apply_cr005_migration(raw_conn)
         finally:
             raw_conn.close()
 

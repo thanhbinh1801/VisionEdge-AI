@@ -4,6 +4,119 @@ from datetime import datetime
 
 CR004_VERSION = "1.2.0-cr004-object-labeling"
 
+CR005_VERSION = "1.3.0-cr005-object-class-key-normalization"
+
+# 8 khoá lớp chuẩn — giá trị hợp lệ duy nhất của `events.object_class`.
+_CANONICAL_CLASS_KEYS = (
+    "container",
+    "truck",
+    "forklift",
+    "crane",
+    "car",
+    "motorbike",
+    "bicycle",
+    "person",
+)
+
+# Tên hiển thị (và các biến thể người dùng/pipeline từng ghi nhầm) → khoá lớp.
+# Xếp theo thứ tự giảm dần độ dài khi so khớp chuỗi con, để "xe container" không
+# bị "xe con" nuốt mất.
+_DISPLAY_NAME_TO_KEY = {
+    "container": "container",
+    "xe container": "container",
+    "thung container": "container",
+    "xe tai": "truck",
+    "xe nang": "forklift",
+    "xe cau": "crane",
+    "xe con": "car",
+    "xe hoi": "car",
+    "o to": "car",
+    "xe may": "motorbike",
+    "xe gan may": "motorbike",
+    "xe dap": "bicycle",
+    "nguoi": "person",
+}
+
+
+def _fold(value: str) -> str:
+    """Bỏ dấu tiếng Việt + hạ chữ thường, để so khớp không phụ thuộc cách gõ."""
+    import unicodedata
+
+    lowered = str(value).strip().lower().replace("đ", "d")
+    decomposed = unicodedata.normalize("NFD", lowered)
+    return "".join(ch for ch in decomposed if unicodedata.category(ch) != "Mn")
+
+
+def normalize_object_class(raw: str | None) -> str | None:
+    """
+    Quy một giá trị `object_class` bất kỳ về khoá lớp tiếng Anh.
+
+    Trả về `None` khi không nhận ra — caller phải giữ nguyên giá trị cũ thay vì
+    đoán bừa, vì ghi sai khoá còn tệ hơn để nguyên dữ liệu bẩn.
+
+    Xử lý được cả các giá trị đã bị pipeline cũ ghi kèm định danh phương tiện,
+    ví dụ "Xe nâng FL-01" hay "Xe container 15R-158.45".
+    """
+    if raw is None:
+        return None
+
+    folded = _fold(raw)
+    if not folded:
+        return None
+    if folded in _CANONICAL_CLASS_KEYS:
+        return folded
+    if folded in _DISPLAY_NAME_TO_KEY:
+        return _DISPLAY_NAME_TO_KEY[folded]
+
+    # Giá trị bẩn dạng "<tên lớp> <mã phương tiện>": so khớp chuỗi con, ưu tiên
+    # tên dài nhất để "xe container ..." không rơi nhầm vào "xe con".
+    for name in sorted(_DISPLAY_NAME_TO_KEY, key=len, reverse=True):
+        if name in folded:
+            return _DISPLAY_NAME_TO_KEY[name]
+    for key in sorted(_CANONICAL_CLASS_KEYS, key=len, reverse=True):
+        if key in folded:
+            return key
+    return None
+
+
+def apply_cr005_migration(raw_conn) -> None:
+    """
+    CR-005: `events.object_class` lưu khoá lớp tiếng Anh, không lưu tên hiển thị.
+
+    Pipeline cũ ghi thẳng `vietnamese_name` vào cột này, nên mọi bộ lọc dạng
+    `WHERE object_class = 'forklift'` đều trả 0 dòng dù dữ liệu có sẵn. Migration
+    quy các bản ghi cũ về khoá chuẩn; giá trị không nhận ra được giữ nguyên.
+    """
+    cursor = raw_conn.cursor()
+    try:
+        rows = cursor.execute(
+            "SELECT DISTINCT object_class FROM events WHERE object_class IS NOT NULL"
+        ).fetchall()
+    except sqlite3.OperationalError:
+        # Bảng events chưa tồn tại (DB mới tinh) — không có gì để chuẩn hoá.
+        cursor.close()
+        return
+
+    for (current,) in rows:
+        if current in _CANONICAL_CLASS_KEYS:
+            continue
+        normalized = normalize_object_class(current)
+        if normalized is None or normalized == current:
+            continue
+        cursor.execute(
+            "UPDATE events SET object_class = ? WHERE object_class = ?",
+            (normalized, current),
+        )
+
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_events_object_class ON events(object_class)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_events_type_timestamp ON events(event_type, timestamp DESC)")
+    cursor.execute(
+        "INSERT OR IGNORE INTO schema_migrations(version, description, applied_at) VALUES (?, ?, ?)",
+        (CR005_VERSION, "CR-005 normalize events.object_class to canonical keys", datetime.utcnow().isoformat()),
+    )
+    raw_conn.commit()
+    cursor.close()
+
 
 def apply_cr004_migration(raw_conn) -> None:
     cursor = raw_conn.cursor()

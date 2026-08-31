@@ -1,5 +1,6 @@
 import logging
 import os
+import threading
 from typing import Any, ClassVar, Dict, List, Tuple, Union
 
 logger = logging.getLogger(__name__)
@@ -594,3 +595,29 @@ class AIVisionPipeline:
             except Exception as e:
                 logger.error(f"Error in YOLO inference: {e}")
         return detections
+
+
+# Một AIVisionPipeline cho mỗi bộ weights, chia sẻ giữa các camera dùng chung weights.
+# Khoá cache là tên weights chứ không phải camera_id: ba camera dùng chung một file .pt
+# thì không có lý do nạp ba bản model vào RAM.
+_pipelines_by_weights: dict[str, "AIVisionPipeline"] = {}
+_pipelines_lock = threading.Lock()
+
+
+def get_pipeline_for_camera(camera_id: str | None) -> "AIVisionPipeline":
+    """Pipeline dùng weights đã cấu hình cho camera này (DETECTION_MODEL_WEIGHTS_BY_CAMERA).
+
+    Camera cổng và camera bãi cần hai bộ weights khác nhau — xem ghi chú ở
+    `Settings.DETECTION_MODEL_WEIGHTS_BY_CAMERA`. Nạp lazy để một camera cấu hình sai
+    weights không chặn cả tiến trình khởi động.
+    """
+    from backend.app.core.config import settings
+
+    weights = settings.detection_weights_for(camera_id)
+    with _pipelines_lock:
+        pipeline = _pipelines_by_weights.get(weights)
+        if pipeline is None:
+            logger.info("Dựng AIVisionPipeline cho camera %s với weights %s", camera_id, weights)
+            pipeline = AIVisionPipeline(model_name_or_path=weights)
+            _pipelines_by_weights[weights] = pipeline
+        return pipeline

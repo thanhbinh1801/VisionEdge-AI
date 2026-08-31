@@ -36,6 +36,9 @@ data/test_clips/
 data/**
 !data/
 !data/*/
+# Git không track thư mục rỗng, nên chỉ `!data/*/` là chưa đủ: máy vừa clone sẽ
+# không có data/video/ và người mới không biết phải thả file .mp4 vào đâu.
+!data/*/.gitkeep
 
 # Node / Frontend (if applicable)
 node_modules/

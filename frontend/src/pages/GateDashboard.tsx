@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   ResponsiveContainer,
   AreaChart,
@@ -13,15 +13,25 @@ import {
   Tooltip,
 } from 'recharts';
 import { useApp } from '../context/AppContext';
-import { fetchZones, fetchLatestEvents, fetchLiveDetections, LiveDetection, OcrStatus } from '../services/api';
+import {
+  fetchZones,
+  fetchLatestEvents,
+  fetchLiveDetections,
+  fetchGateKpi,
+  getVideoFeedUrl,
+  GateKpi,
+  OcrStatus,
+} from '../services/api';
 import { ZoneConfig, GateEvent } from '../types';
 
 const CAMERA_ID = 'GATE-01';
-const VIDEO_SRC = '/videos/GATE-01.mp4';
 const POLL_INTERVAL_MS = 3000;
 // Vòng lặp detection tự lên lịch lại sau mỗi lần hoàn tất, thay vì setInterval cố định:
-// suy luận YOLO mất vài trăm ms, dùng interval ngắn sẽ chồng request. Nghỉ ngắn giữa
-// hai lần gọi để bbox bám sát video, vì khoảng nghỉ chính là độ trễ tối đa của overlay.
+// suy luận YOLO mất vài trăm ms, dùng interval ngắn sẽ chồng request.
+//
+// Vòng lặp này KHÔNG còn để vẽ bbox — luồng MJPEG lo việc đó. Nó vẫn phải chạy vì
+// `GET /events/live-detections` là nơi backend đọc biển số và ghi `LPR_PASSAGE`; ngừng
+// gọi là ngừng nhận dạng. Nó cũng mang về trạng thái OCR engine cho dải cảnh báo.
 const DETECTION_GAP_MS = 700;
 const DETECTION_CONF_THRESHOLD = 0.35;
 const STALE_AFTER_MS = 12000;
@@ -50,11 +60,17 @@ function formatClockTime(iso: string | undefined, withSeconds = false): string {
   if (!iso) return '--:--';
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return '--:--';
-  return date.toLocaleTimeString('vi-VN', {
+  const clock = date.toLocaleTimeString('vi-VN', {
     hour: '2-digit',
     minute: '2-digit',
     ...(withSeconds ? { second: '2-digit' } : {}),
   });
+  // Sự kiện của ngày khác phải kèm ngày. Chỉ in giờ:phút thì một bản ghi từ ba hôm
+  // trước trông y hệt một bản ghi vừa xảy ra, và người trực cổng không có cách nào
+  // nhận ra bảng đã ngừng cập nhật.
+  const isToday = date.toDateString() === new Date().toDateString();
+  if (isToday) return clock;
+  return `${date.toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit' })} ${clock}`;
 }
 
 function mapEventRow(evt: any): GateEventRow {
@@ -114,18 +130,23 @@ export const GateDashboard: React.FC = () => {
   const [zones, setZones] = useState<ZoneConfig[]>([]);
   const [activeZoneId, setActiveZoneId] = useState<string | null>(null);
   const [events, setEvents] = useState<GateEventRow[]>([]);
-  const [detections, setDetections] = useState<LiveDetection[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [lastSyncAt, setLastSyncAt] = useState<number | null>(null);
   const [isNarrow, setIsNarrow] = useState<boolean>(false);
-  const [videoFailed, setVideoFailed] = useState<boolean>(false);
+  const [streamStatus, setStreamStatus] = useState<'loading' | 'live' | 'error'>('loading');
   const [detectionError, setDetectionError] = useState<string | null>(null);
   // Trạng thái OCR engine do backend báo về. Trước đây EasyOCR thiếu package thì LPR
   // chết câm lặng và UI chỉ hiện "Chưa ghi nhận biển số nào", không phân biệt được
   // "không có xe" với "engine hỏng".
   const [ocrStatus, setOcrStatus] = useState<OcrStatus | undefined>(undefined);
   const [eventsError, setEventsError] = useState<string | null>(null);
-  const videoRef = useRef<HTMLVideoElement>(null);
+  // KPI do backend tính trên toàn bộ bảng events. `null` nghĩa là chưa lấy được — lúc
+  // đó thẻ KPI hiển thị "—" thay vì một con số bịa từ 20 dòng đang có trong tay.
+  const [gateKpi, setGateKpi] = useState<GateKpi | null>(null);
+  // Luồng MJPEG do backend vẽ sẵn bbox lên chính frame nó vừa suy luận, nên khung và
+  // hình không thể lệch nhau. Zone vẫn do frontend vẽ đè bằng SVG vì người dùng chỉnh
+  // được toạ độ ngay trên đó — zone là hình tĩnh nên không có chuyện lệch pha.
+  const videoSrc = useMemo(() => getVideoFeedUrl(CAMERA_ID, { drawZones: false }), []);
 
   // Inline Zone Name Editing State
   const [editingZoneId, setEditingZoneId] = useState<string | null>(null);
@@ -163,26 +184,24 @@ export const GateDashboard: React.FC = () => {
     };
   }, [zonesByCam]);
 
-  // BBox bám theo đúng khung hình đang phát: gửi kèm video.currentTime để backend
-  // suy luận trên chính frame đó, thay vì trên frame nào đó nó tự đọc được.
+  // Nhịp chạy nhận dạng biển số. Không còn tham số thời điểm: cả luồng MJPEG lẫn
+  // endpoint này cùng lấy snapshot từ một `CameraFramePipeline`, nên chúng vốn đã nhìn
+  // cùng một frame. Trước đây phải gửi kèm `video.currentTime` vì thẻ <video> phát một
+  // dòng thời gian riêng, và cách bù đó không bao giờ khớp được (TASK-009/BUG-001).
   useEffect(() => {
     let cancelled = false;
     let timer: number | undefined;
 
     const tick = async () => {
-      const video = videoRef.current;
-      // Đọc mốc thời gian ngay trước khi gọi để sai lệch chỉ còn bằng độ trễ suy luận.
-      const at = video && !video.paused ? video.currentTime : undefined;
       try {
-        const liveResult = await fetchLiveDetections(CAMERA_ID, DETECTION_CONF_THRESHOLD, at);
+        const liveResult = await fetchLiveDetections(CAMERA_ID, DETECTION_CONF_THRESHOLD);
         if (cancelled) return;
-        setDetections(liveResult.detections);
         setOcrStatus(liveResult.ocrStatus);
         setDetectionError(null);
         if (liveResult.detections.length > 0) setLastSyncAt(Date.now());
       } catch (err) {
         if (cancelled) return;
-        // Giữ bbox cuối cùng thay vì xoá trắng: một nhịp lỗi không có nghĩa là khung hình trống.
+        // Một nhịp lỗi không có nghĩa là luồng đã chết; giữ nguyên trạng thái và thử lại.
         setDetectionError(err instanceof Error ? err.message : 'Dịch vụ AI không phản hồi');
       } finally {
         // Luôn hẹn lại lượt kế tiếp, kể cả khi lượt này lỗi, để vòng lặp tự phục hồi.
@@ -203,8 +222,14 @@ export const GateDashboard: React.FC = () => {
 
     const loadBackendData = async () => {
       try {
-        const rawEvents = await fetchLatestEvents(CAMERA_ID, 20);
+        // Danh sách hiển thị và KPI lấy từ hai nguồn khác nhau có chủ đích: bảng bên
+        // phải chỉ cần 20 dòng gần nhất, còn KPI phải tính trên toàn bộ dữ liệu.
+        const [rawEvents, kpi] = await Promise.all([
+          fetchLatestEvents(CAMERA_ID, 20),
+          fetchGateKpi(CAMERA_ID).catch(() => null),
+        ]);
         if (cancelled) return;
+        setGateKpi(kpi);
 
         // Chỉ lấy sự kiện LPR: endpoint /events?camera_id=GATE-01 còn trả cả ZONE_VIOLATION
         // (license_plate = null) — nếu không lọc, người đi vào zone sẽ bị đếm nhầm thành
@@ -253,13 +278,12 @@ export const GateDashboard: React.FC = () => {
     setSubTab('zone');
   }, [setTab, setSubTab]);
 
-  // KPI numbers computed from real backend event rows.
-  const readEvents = events.filter((e) => e.conf !== null);
-  const unreadCount = events.length - readEvents.length;
-  const avgConfValue =
-    readEvents.length > 0
-      ? Math.round(readEvents.reduce((sum, e) => sum + (e.conf || 0), 0) / readEvents.length)
-      : 0;
+  // Bốn thẻ KPI lấy số từ backend, nơi có toàn bộ dữ liệu. Đếm trên mảng `events` như
+  // trước là sai: mảng đó bị chặn ở 20 dòng gần nhất nên "Lượt xe qua cổng" đứng cứng
+  // ở 20, và "Không đọc được" luôn bằng 0 vì một lượt đọc hỏng không sinh bản ghi nào
+  // để lọt vào danh sách.
+  const kpiText = (value: number | undefined) => (gateKpi ? String(value ?? 0) : '—');
+  const avgConfValue = Math.round(gateKpi?.avg_confidence ?? 0);
 
   const trend = useMemo(() => buildTrendSeries(events), [events]);
   const hasTrend = trend.length > 0;
@@ -270,7 +294,7 @@ export const GateDashboard: React.FC = () => {
   const kpis = [
     {
       label: 'Lượt xe qua cổng',
-      value: String(events.length),
+      value: kpiText(gateKpi?.vehicles_total),
       color: 'var(--ink)',
       chart: (
         <AreaChart data={trend} margin={{ top: 2, right: 0, bottom: 0, left: 0 }}>
@@ -304,7 +328,7 @@ export const GateDashboard: React.FC = () => {
     },
     {
       label: 'Biển số đọc được',
-      value: String(readEvents.length),
+      value: kpiText(gateKpi?.lpr_success),
       color: 'var(--ok)',
       chart: (
         <BarChart data={trend} margin={{ top: 2, right: 0, bottom: 0, left: 0 }}>
@@ -324,7 +348,7 @@ export const GateDashboard: React.FC = () => {
     },
     {
       label: 'Không đọc được',
-      value: String(unreadCount),
+      value: kpiText(gateKpi?.lpr_failed),
       color: 'var(--p1)',
       chart: (
         <LineChart data={trend} margin={{ top: 4, right: 2, bottom: 0, left: 2 }}>
@@ -352,7 +376,7 @@ export const GateDashboard: React.FC = () => {
     },
     {
       label: 'Độ tin cậy trung bình',
-      value: `${avgConfValue}%`,
+      value: gateKpi ? `${avgConfValue}%` : '—',
       color: avgConfValue >= 95 ? 'var(--ok)' : 'var(--ink)',
       chart: (
         <RadialBarChart
@@ -375,14 +399,6 @@ export const GateDashboard: React.FC = () => {
       ),
     },
   ];
-
-  // BBox biển số ưu tiên detection có độ tin cậy cao nhất từ AI Vision Pipeline.
-  const primaryDetection = useMemo(() => {
-    if (detections.length === 0) return null;
-    return detections.reduce((best, d) => (d.confidence > best.confidence ? d : best), detections[0]);
-  }, [detections]);
-
-  const latestPlate = events.find((e) => e.plate !== '—');
 
   return (
     <div style={{ padding: '20px', maxWidth: '1360px', margin: '0 auto' }}>
@@ -582,8 +598,8 @@ export const GateDashboard: React.FC = () => {
               overflow: 'hidden',
             }}
           >
-            {/* Live Gate Camera Stream */}
-            {videoFailed ? (
+            {/* Live Gate Camera Stream (MJPEG do backend vẽ sẵn bbox) */}
+            {streamStatus === 'error' ? (
               <div
                 style={{
                   position: 'absolute',
@@ -603,19 +619,15 @@ export const GateDashboard: React.FC = () => {
                   ⚠️
                 </span>
                 Không tải được luồng camera {CAMERA_ID}.
-                <span style={{ fontSize: '11px' }}>Kiểm tra tệp {VIDEO_SRC} trên backend.</span>
+                <span style={{ fontSize: '11px' }}>Kiểm tra luồng MJPEG của backend.</span>
               </div>
             ) : (
-              <video
-                key={VIDEO_SRC}
-                ref={videoRef}
-                src={VIDEO_SRC}
-                autoPlay
-                loop
-                muted
-                playsInline
-                aria-label={`Luồng camera trực tiếp ${CAMERA_ID} tại cổng vào`}
-                onError={() => setVideoFailed(true)}
+              <img
+                key={videoSrc}
+                src={videoSrc}
+                alt={`Luồng camera trực tiếp ${CAMERA_ID} tại cổng vào`}
+                onLoad={() => setStreamStatus('live')}
+                onError={() => setStreamStatus('error')}
                 style={{
                   position: 'absolute',
                   inset: 0,
@@ -731,49 +743,11 @@ export const GateDashboard: React.FC = () => {
               );
             })}
 
-            {/* Realtime BBox Overlay từ AI Vision Pipeline (bbox: [left, top, width, height] %) */}
-            {detections.map((d) => {
-              const [left, top, width, height] = d.bbox;
-              const isPrimary = primaryDetection !== null && d.id === primaryDetection.id;
-              const boxColor = d.zone_violation ? '#ff453a' : isPrimary ? '#39e0d0' : '#2f9bff';
-              const badge =
-                isPrimary && latestPlate
-                  ? `${latestPlate.plate} · ${latestPlate.conf !== null ? `${latestPlate.conf}%` : 'không đọc được'}`
-                  : `${d.vietnamese_name} · ${Math.round(d.confidence * 100)}%`;
-              return (
-                <div
-                  key={d.id}
-                  style={{
-                    position: 'absolute',
-                    left: `${left}%`,
-                    top: `${top}%`,
-                    width: `${width}%`,
-                    height: `${height}%`,
-                    border: `1.5px solid ${boxColor}`,
-                    background: `${boxColor}1a`,
-                    pointerEvents: 'none',
-                  }}
-                >
-                  <span
-                    style={{
-                      position: 'absolute',
-                      left: '-1px',
-                      top: '-18px',
-                      background: boxColor,
-                      color: '#06080a',
-                      fontSize: '10px',
-                      fontWeight: 700,
-                      padding: '1px 7px',
-                      borderRadius: '3px',
-                      whiteSpace: 'nowrap',
-                      fontFamily: "'IBM Plex Mono', monospace",
-                    }}
-                  >
-                    {badge}
-                  </span>
-                </div>
-              );
-            })}
+            {/* Bounding box do luồng MJPEG vẽ trực tiếp lên frame, giống tab Giám sát
+                khu vực. Vẽ lại ở đây bằng div theo dữ liệu poll là cách cũ và là
+                nguyên nhân của TASK-009/BUG-001: thẻ <video> chạy theo đồng hồ trình
+                duyệt còn backend suy luận trên frame của riêng nó, nên khung luôn mô tả
+                một khoảnh khắc khác với khoảnh khắc đang hiển thị. */}
 
             {/* Live Clock Overlay */}
             <div

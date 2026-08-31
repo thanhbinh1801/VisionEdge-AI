@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from backend.app.services.frame_extractor import extract_jpeg_frame, resolve_video_path
 from backend.app.services.video_stream import get_camera_pipeline
-from backend.app.services.vision_pipeline import AIVisionPipeline
+from backend.app.services.vision_pipeline import AIVisionPipeline, get_pipeline_for_camera
 from backend.app.services.zone_cache import zone_cache_service
 from backend.database.engine import get_db
 from backend.database.models import Zone as ZoneModel
@@ -122,7 +122,7 @@ def _serialize_zone(zone: ZoneModel, version: int) -> dict[str, Any]:
 def _refresh_zone_runtime(db: Session, camera_id: str) -> dict[str, Any]:
     try:
         state = zone_cache_service.refresh_camera(db, camera_id)
-        pipeline = get_camera_pipeline(camera_id, vision_pipeline)
+        pipeline = get_camera_pipeline(camera_id, get_pipeline_for_camera(camera_id))
         pipeline.update_zones(list(state.zones), state.zone_version)
         return {
             "camera_id": state.camera_id,

@@ -126,7 +126,9 @@ export const AreaSecurityDashboard: React.FC = () => {
             return {
               id: evt.id,
               time: timeStr,
-              obj: evt.object_class,
+              // `object_class` giờ là khoá lớp tiếng Anh; tên hiển thị do backend
+              // dựng kèm trong `vietnamese_name`.
+              obj: evt.vietnamese_name || evt.object_class,
               zone: evt.zone_name || 'Ngoài zone',
               st: isOk ? 'Được phép' : 'Vi phạm',
               ok: isOk,

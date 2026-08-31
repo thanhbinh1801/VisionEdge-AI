@@ -1,4 +1,4 @@
-import { EventRecord, KpiData, ZoneCacheInfo, ZoneConfig, VehicleTag } from '../types';
+import { AssistantClip, EventRecord, KpiData, ZoneCacheInfo, ZoneConfig, VehicleTag } from '../types';
 import {
   ApiResponse,
   BBoxSample,
@@ -264,6 +264,29 @@ export async function fetchLatestEvents(cameraId?: string, limit: number = 20): 
   return await res.json();
 }
 
+/** Bốn chỉ số của dashboard cổng, do backend tính trên toàn bộ dữ liệu. */
+export interface GateKpi {
+  camera_id: string;
+  vehicles_total: number;
+  lpr_success: number;
+  lpr_failed: number;
+  /** Thang 0-100. */
+  avg_confidence: number;
+}
+
+/**
+ * Lấy KPI cổng từ backend.
+ *
+ * Trước đây dashboard tự đếm trên mảng sự kiện vừa tải về, mà mảng đó bị chặn ở
+ * `limit = 20` — nên "Lượt xe qua cổng" đứng cứng ở 20 ngay khi cơ sở dữ liệu vượt
+ * ngưỡng đó, và "Không đọc được" luôn bằng 0 vì lượt đọc hỏng không sinh bản ghi nào.
+ */
+export async function fetchGateKpi(cameraId: string): Promise<GateKpi> {
+  const res = await fetch(`${API_BASE_URL}/events/gate-kpi?camera_id=${encodeURIComponent(cameraId)}`);
+  if (!res.ok) throw new Error(`Không thể tải KPI cổng (HTTP ${res.status})`);
+  return await res.json();
+}
+
 const CLASS_ALIAS_MAP: Record<string, string[]> = {
   container: ['container', 'Container', 'Xe container'],
   truck: ['truck', 'Xe tải'],
@@ -413,28 +436,70 @@ export async function fetchLiveDetections(cameraId: string = 'BAI-KIEM', confThr
   };
 }
 
+/** Một lượt hội thoại gửi kèm để trợ lý hiểu câu hỏi rút gọn ("còn nữa không"). */
+export interface AssistantTurn {
+  role: 'user' | 'ai';
+  text: string;
+}
+
 /** Phản hồi của `POST /assistant/query` — khớp `QueryResponse` tại backend/app/models/schemas/assistant.py. */
 export interface AssistantQueryResult {
   answer: string;
   sql_query?: string | null;
-  clip_url?: string | null;
+  clips: AssistantClip[];
+  /** `QuerySpec` backend đã dùng; gửi lại ở lượt sau để hỏi tiếp. */
+  spec?: Record<string, unknown> | null;
 }
 
-export async function askAssistant(query: string): Promise<AssistantQueryResult> {
+function parseClips(raw: unknown): AssistantClip[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.flatMap((item) => {
+    if (!item || typeof item !== 'object') return [];
+    const clip = item as Record<string, unknown>;
+    if (typeof clip.url !== 'string' || !clip.url) return [];
+    return [
+      {
+        event_id: typeof clip.event_id === 'string' ? clip.event_id : null,
+        url: clip.url,
+        timestamp: typeof clip.timestamp === 'string' ? clip.timestamp : null,
+        camera: typeof clip.camera === 'string' ? clip.camera : null,
+        label: typeof clip.label === 'string' ? clip.label : null,
+      },
+    ];
+  });
+}
+
+export async function askAssistant(
+  query: string,
+  options: { history?: AssistantTurn[]; previousSpec?: Record<string, unknown> | null } = {}
+): Promise<AssistantQueryResult> {
   const res = await fetch(`${API_BASE_URL}/assistant/query`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ query }),
+    body: JSON.stringify({
+      query,
+      history: options.history ?? [],
+      previous_spec: options.previousSpec ?? null,
+    }),
   });
   if (!res.ok) throw new Error(`Trợ lý không phản hồi (HTTP ${res.status})`);
   const data = await res.json();
   if (typeof data?.answer !== 'string') {
     throw new Error('Phản hồi của trợ lý thiếu trường `answer`');
   }
+
+  // Backend cũ chỉ trả `clip_url`; quy về cùng một hình dạng `clips` để UI chỉ có
+  // một đường render.
+  const clips = parseClips(data.clips);
+  if (clips.length === 0 && typeof data.clip_url === 'string' && data.clip_url) {
+    clips.push({ url: data.clip_url });
+  }
+
   return {
     answer: data.answer,
     sql_query: typeof data.sql_query === 'string' ? data.sql_query : null,
-    clip_url: typeof data.clip_url === 'string' ? data.clip_url : null,
+    clips,
+    spec: data.spec && typeof data.spec === 'object' ? data.spec : null,
   };
 }
 

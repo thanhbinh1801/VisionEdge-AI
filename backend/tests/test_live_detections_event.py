@@ -253,13 +253,20 @@ def test_area_metadata_violation_persistence_writes_chatbot_clip(db_session, mon
 
     assert len(persisted) == 1
     assert persisted[0].event_type == "ZONE_VIOLATION"
-    assert persisted[0].object_class == "Xe nâng"
+    # CR-005: cột lưu khoá lớp, không lưu tên hiển thị. Lưu "Xe nâng" khiến mọi bộ
+    # lọc `WHERE object_class = 'forklift'` của trợ lý hỏi đáp trả về 0 dòng.
+    assert persisted[0].object_class == "forklift"
     assert persisted[0].bbox == [10.0, 20.0, 30.0, 40.0]
     assert persisted[0].video_clip_url.startswith("/media/clips/clip_WS-CAM_")
     events._wait_for_background_alert_jobs(timeout=10.0)
     clip_path = clips_dir / persisted[0].video_clip_url.rsplit("/", 1)[-1]
     _assert_playable_mp4(clip_path, expected_seconds=10.0)
     assert _first_frame_mean(clip_path) == pytest.approx(30.0, abs=8.0)
+
+    # Tên tiếng Việt không mất đi — nó được dựng lại ở tầng đọc cho client.
+    payload = events._event_response_from_model(persisted[0])
+    assert payload["object_class"] == "forklift"
+    assert payload["vietnamese_name"] == "Xe nâng"
 
 
 def test_violation_evidence_job_overwrites_stale_source_start_clip(db_session, monkeypatch, tmp_path):
