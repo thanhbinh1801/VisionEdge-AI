@@ -230,8 +230,25 @@ VALUES
 --     .venv/Scripts/python.exe backend/scripts/render_zone_overlay.py
 INSERT OR IGNORE INTO zones (id, camera_id, name, vertices, allowed_classes, forbidden_classes, color)
 VALUES
-    ('zA', 'GATE-01', 'Làn IN 1', '[{"x":30,"y":40},{"x":47,"y":40},{"x":38,"y":100},{"x":2,"y":100}]', '["container","truck"]', '["car","motorbike","bicycle"]', '#30d158'),
-    ('zB', 'GATE-01', 'Làn IN 2', '[{"x":52,"y":38},{"x":80,"y":34},{"x":99,"y":98},{"x":58,"y":100}]', '["container","truck"]', '["car","motorbike","bicycle"]', '#2f9bff'),
+    -- GATE-01 vẽ lại cho camera biển số 'Cvao-Bien-L2' (clip cắt bằng
+    -- backend/scripts/prepare_gate_lpr_clip.py). Camera đặt ngang tầm cản trước và chỉ
+    -- ngắm **một** làn, nên bộ này khác hẳn bộ cũ vẽ cho camera toàn cảnh hai làn.
+    --
+    -- 'Làn IN' bám tâm bbox xe, đo trên clip (86 detection): xe thật ở (28, 25), lúc áp
+    -- sát camera kéo tới (50, 50). Biên phải dừng ở 58 để loại một 'container' đứng yên
+    -- ở (65, 14) suốt clip — đó là bãi container ở hậu cảnh, không phải xe qua cổng.
+    -- Biên dưới dừng ở 56 vì phần dưới khung hình chỉ là mặt đường.
+    --
+    -- 'Bốt kiểm soát' KHÔNG phải làn vào: tên không bắt đầu bằng "Làn IN" nên
+    -- `_is_inbound_lane()` loại nó khỏi luồng LPR. Nó tồn tại để đánh dấu khu bốt bên
+    -- phải, nơi bình cứu hoả và vật màu vàng trên cột hay bị nhận nhầm là tấm biển.
+    --
+    -- forbidden để rỗng: ở cự ly này YOLO-World gọi cùng một chiếc đầu kéo lúc là
+    -- 'truck', lúc 'car', lúc 'container' (đo được cả ba trên cùng một xe). Cấm 'car'
+    -- như bộ cũ sẽ sinh vi phạm giả mỗi lần nhãn dao động. Zone ở camera cổng phục vụ
+    -- việc xác định xe đang ở làn vào để chạy LPR, không phải để bắt vi phạm.
+    ('zA', 'GATE-01', 'Làn IN', '[{"x":0,"y":0},{"x":58,"y":0},{"x":58,"y":56},{"x":0,"y":56}]', '["container","truck","car","motorbike"]', '[]', '#30d158'),
+    ('zB', 'GATE-01', 'Bốt kiểm soát', '[{"x":60,"y":0},{"x":100,"y":0},{"x":100,"y":40},{"x":60,"y":40}]', '["container","truck","car","motorbike","person"]', '[]', '#2f9bff'),
     ('zK1', 'BAI-KIEM', 'Zone bãi kiểm hoá', '[{"x":54,"y":42},{"x":89,"y":44},{"x":93,"y":78},{"x":55,"y":80}]', '["container","forklift","truck","crane","person"]', '["car","motorbike","bicycle"]', '#30D158'),
     ('zK2', 'BAI-KIEM', 'Zone làn di chuyển', '[{"x":38,"y":42},{"x":52,"y":42},{"x":40,"y":100},{"x":10,"y":100}]', '["container","forklift","truck","crane","person"]', '["car","motorbike","bicycle"]', '#FF9F0A'),
     ('zK3', 'BAI-KIEM', 'Zone bãi container', '[{"x":0,"y":40},{"x":26,"y":38},{"x":30,"y":66},{"x":0,"y":72}]', '["container","forklift","truck","crane","person"]', '["car","motorbike","bicycle"]', '#EF4444'),

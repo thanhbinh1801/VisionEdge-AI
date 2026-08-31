@@ -18,9 +18,37 @@ if project_root not in sys.path:
 from backend.app.core.logger import logger
 from backend.app.api.router import api_router, websocket_router
 from backend.app.core.config import settings
+from backend.app.services.frame_extractor import VIDEO_EXTENSIONS
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+
+
+def _resolve_videos_dir() -> str:
+    """Thư mục phục vụ `/videos`, ưu tiên VIDEOS_DIR trong .env.
+
+    Giữ nguyên các vị trí mặc định cũ làm fallback để repo sẵn có không phải đổi
+    layout: thư mục nào đang thật sự chứa video thì dùng thư mục đó.
+    """
+    configured = os.getenv("VIDEOS_DIR") or getattr(settings, "VIDEOS_DIR", "")
+    candidates = []
+    if configured:
+        candidates.append(
+            configured if os.path.isabs(configured) else os.path.join(project_root, configured)
+        )
+    candidates.append(os.path.join(project_root, "data", "video"))
+    candidates.append(os.path.join(project_root, "data", "videos"))
+    candidates.append(os.path.join(backend_dir, "data", "videos"))
+
+    for candidate in candidates:
+        resolved = os.path.normpath(candidate)
+        if os.path.isdir(resolved) and any(
+            entry.lower().endswith(VIDEO_EXTENSIONS) for entry in os.listdir(resolved)
+        ):
+            return resolved
+    # Không thư mục nào có video: trả ứng viên đầu tiên để mount vẫn tồn tại và
+    # người dùng chỉ cần thả file vào đúng đường dẫn ghi trong log cảnh báo.
+    return os.path.normpath(candidates[0])
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -37,12 +65,28 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Mount Static Files for videos and prototype image assets
-videos_dir = os.path.join(project_root, "data", "video")
-if not os.path.exists(videos_dir):
-    videos_dir = os.path.join(backend_dir, "data", "videos")
-if os.path.exists(videos_dir):
-    app.mount("/videos", StaticFiles(directory=videos_dir), name="videos")
+# Mount Static Files for videos and prototype image assets.
+# Trang Cổng Vấn phát video bằng thẻ <video src="/videos/GATE-01.mp4"> nên nó ăn
+# thẳng mount này, không đi qua resolve_video_path(). Dùng chung VIDEOS_DIR để hai
+# đường (static và AI pipeline) không trỏ về hai thư mục khác nhau.
+videos_dir = _resolve_videos_dir()
+# Mount vô điều kiện: trước đây bọc trong `if os.path.exists(...)` nên máy vừa clone
+# (git không track thư mục rỗng) khởi động backend là /videos biến mất im lặng, copy
+# video vào sau cũng vô ích vì mount chỉ chạy một lần lúc import.
+os.makedirs(videos_dir, exist_ok=True)
+app.mount("/videos", StaticFiles(directory=videos_dir), name="videos")
+
+_available_videos = sorted(
+    entry for entry in os.listdir(videos_dir) if entry.lower().endswith(VIDEO_EXTENSIONS)
+)
+if _available_videos:
+    logger.info(f"Mount /videos -> {videos_dir} ({len(_available_videos)} file: {', '.join(_available_videos)})")
+else:
+    logger.warning(
+        f"Mount /videos -> {videos_dir} nhưng thư mục KHÔNG có file video nào. "
+        f"Trang Cổng Vấn sẽ đen vì /videos/GATE-01.mp4 trả 404. "
+        f"Chép các file .mp4 demo vào đúng thư mục này (tên phân biệt gạch ngang/gạch dưới) rồi khởi động lại."
+    )
 
 assets_dir = os.path.join(project_root, "Prototype", "assets")
 if os.path.exists(assets_dir):

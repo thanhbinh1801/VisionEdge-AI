@@ -5,7 +5,7 @@ from contextlib import suppress
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from backend.app.services.vision_pipeline import AIVisionPipeline
+from backend.app.services.vision_pipeline import AIVisionPipeline, get_pipeline_for_camera
 from backend.app.api.v1.events import persist_area_metadata_violations
 from backend.app.services.area_metadata import build_area_metadata_event
 from backend.app.services.video_stream import get_camera_pipeline
@@ -75,7 +75,7 @@ async def websocket_events_endpoint(websocket: WebSocket):
     disconnect_task = asyncio.create_task(_watch_disconnect(websocket, disconnected))
     try:
         zone_state = zone_cache_service.get_or_load(db, camera_id)
-        pipeline = get_camera_pipeline(camera_id, vision_pipeline)
+        pipeline = get_camera_pipeline(camera_id, get_pipeline_for_camera(camera_id))
         pipeline.update_zones(list(zone_state.zones), zone_state.zone_version)
         # Chờ theo nhịp inference chứ không theo nhịp decode. Sau CR-006 hai nhịp này đã
         # tách rời: decode chạy ~25 FPS còn inference ~3 FPS, nên nếu chờ theo frame thì

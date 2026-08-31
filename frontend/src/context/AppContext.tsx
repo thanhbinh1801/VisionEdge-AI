@@ -321,6 +321,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     // Một id duy nhất cho bong bóng trả lời, để thay tại chỗ khi backend phản hồi
     // thay vì nối thêm tin nhắn mới.
     const answerId = 'ai-' + Date.now();
+
+    // Ngữ cảnh của lượt trước, lấy trước khi ghi thêm tin nhắn mới vào log. Nhờ nó
+    // trợ lý hiểu được câu hỏi rút gọn kiểu "còn nữa không" hay "lọc xe nâng thôi".
+    const history = chatMessages
+      .filter((m) => m.status !== 'pending' && m.status !== 'error')
+      .slice(-4)
+      .map((m) => ({ role: m.role, text: m.text }));
+    const previousSpec =
+      [...chatMessages].reverse().find((m) => m.role === 'ai' && m.spec)?.spec ?? null;
+
     setChatMessages((prev) => [
       ...prev,
       { id: 'user-' + Date.now(), role: 'user', text: userText },
@@ -328,7 +338,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     ]);
 
     try {
-      const res = await askAssistant(userText);
+      const res = await askAssistant(userText, { history, previousSpec });
       setChatMessages((prev) =>
         prev.map((m) =>
           m.id === answerId
@@ -336,7 +346,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 ...m,
                 text: res.answer,
                 sqlQuery: res.sql_query || undefined,
-                clipUrl: res.clip_url || undefined,
+                clips: res.clips,
+                spec: res.spec ?? null,
                 status: undefined,
               }
             : m

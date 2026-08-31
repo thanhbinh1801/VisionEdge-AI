@@ -1,6 +1,7 @@
 import logging
 import time
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -22,10 +23,12 @@ from backend.app.services.alert_dispatcher import alert_dispatcher
 from backend.app.services.area_metadata import build_area_metadata_event
 from backend.app.services.event_manager import EventManager
 from backend.app.services.lpr_engine import lpr_engine
+from backend.app.services.plate_vote import plate_vote_tracker
 from backend.app.services.video_stream import get_camera_pipeline
 from backend.app.services.vision_pipeline import (
     OBJECT_VIETNAMESE_NAMES,
     AIVisionPipeline,
+    get_pipeline_for_camera,
 )
 from backend.app.services.zone_cache import zone_cache_service
 from backend.database.engine import get_db
@@ -98,6 +101,20 @@ def _resolve_video_path_or_503(camera_id: str) -> str:
         ) from exc
 
 
+class GateKpiResponse(BaseModel):
+    """Bốn chỉ số của dashboard cổng (REQ-001)."""
+
+    camera_id: str
+    #: Tổng lượt xe qua cổng = đọc được + không đọc được.
+    vehicles_total: int
+    #: Số lượt đọc ra biển số, đếm thẳng trên bảng events.
+    lpr_success: int
+    #: Số lượt có xe trong làn nhưng không đọc nổi biển.
+    lpr_failed: int
+    #: Độ tin cậy trung bình của các lượt đọc thành công, thang 0-100.
+    avg_confidence: float
+
+
 class EventResponse(BaseModel):
     id: str
     timestamp: datetime
@@ -109,6 +126,8 @@ class EventResponse(BaseModel):
     severity_level: int
     license_plate: str | None = None
     object_class: str
+    #: Tên hiển thị tiếng Việt của `object_class`; client dùng trường này để render.
+    vietnamese_name: str | None = None
     confidence: float
     bbox: Any | None = None
     crop_image_url: str | None = None
@@ -141,6 +160,7 @@ def _event_response_from_model(event: EventModel) -> dict[str, Any]:
         "severity_level": event.severity_level,
         "license_plate": event.license_plate,
         "object_class": event.object_class,
+        "vietnamese_name": OBJECT_VIETNAMESE_NAMES.get(event.object_class, event.object_class),
         "confidence": event.confidence,
         "bbox": event.bbox,
         "crop_image_url": event.crop_image_url,
@@ -205,7 +225,10 @@ def _persist_violation_event(
         zone_id=zone_id,
         event_type="ZONE_VIOLATION",
         severity_level=3,
-        object_class=detection.get("vietnamese_name") or OBJECT_VIETNAMESE_NAMES.get(cls_name, cls_name),
+        # Cột lưu *khoá lớp* tiếng Anh, không lưu tên hiển thị: trợ lý hỏi đáp và
+        # mọi bộ lọc đều so khớp theo khoá này. Tên tiếng Việt được dựng lại ở
+        # tầng đọc (`_event_response_from_model`).
+        object_class=cls_name,
         confidence=detection.get("confidence", 0.95),
         bbox=detection.get("bbox"),
         crop_image_url="/media/crops/crop_live.jpg",
@@ -333,6 +356,67 @@ def _update_gate_kpi(db: Session, *, recognized: bool, confidence: float) -> Non
     )
 
 
+@router.get("/gate-kpi", response_model=GateKpiResponse)
+def gate_kpi(
+    camera_id: str = Query(GATE_CAMERA_ID, description="Mã camera cổng"),
+    db: Session = Depends(get_db),  # noqa: B008
+) -> GateKpiResponse:
+    """Bốn chỉ số của dashboard cổng.
+
+    Lượt đọc thành công và độ tin cậy đếm thẳng trên bảng `events` chứ không lấy từ
+    `kpi_realtime_cache`: bảng events là nguồn sự thật, nên khi ai đó xoá một bản ghi
+    sai thì các con số tự khớp lại ngay, còn bộ đếm cộng dồn thì không.
+
+    Đếm theo **biển số phân biệt**, không theo số bản ghi. Nguồn demo là file video chạy
+    vòng lặp nên cùng năm chiếc xe đi qua lại vô hạn lần, mỗi vòng sinh thêm một bản ghi;
+    đếm bản ghi thì con số tăng mãi mà không đối chiếu được với bất cứ thứ gì.
+
+    Đây là chỗ đúng để chặn trùng. Có lúc việc chặn nằm ở tầng ghi dữ liệu — không ghi
+    sự kiện cho biển đã gặp — và cái giá phải trả là bảng "Biển số đã nhận diện" đóng
+    băng vĩnh viễn ở lần cuối mỗi xe được thấy, vì chẳng còn sự kiện mới nào để hiển thị.
+
+    Riêng số lượt "không đọc được" chỉ có ở cache, vì một lượt đọc hỏng không sinh bản
+    ghi nào để mà đếm.
+    """
+    success_rows = (
+        db.query(EventModel.license_plate, EventModel.confidence)
+        .filter(
+            EventModel.camera_id == camera_id,
+            EventModel.event_type == "LPR_PASSAGE",
+            EventModel.license_plate.isnot(None),
+        )
+        .all()
+    )
+    lpr_success = len({row[0] for row in success_rows})
+    # Độ tin cậy lấy trung bình trên mỗi biển số, không phải trên mỗi bản ghi: một chiếc
+    # xe đi qua nhiều vòng video sẽ có nhiều bản ghi và sẽ kéo lệch số trung bình chung.
+    # Event.confidence lưu thang 0-1, còn dashboard hiển thị phần trăm.
+    per_plate: dict[str, list[float]] = {}
+    for plate, confidence in success_rows:
+        per_plate.setdefault(plate, []).append(float(confidence or 0.0))
+    avg_confidence = (
+        round(
+            sum(sum(values) / len(values) for values in per_plate.values())
+            / len(per_plate)
+            * 100.0,
+            2,
+        )
+        if per_plate
+        else 0.0
+    )
+
+    kpi = KpiRepository(db).get_kpi()
+    lpr_failed = int(kpi.gate_lpr_failed or 0) if kpi else 0
+
+    return GateKpiResponse(
+        camera_id=camera_id,
+        vehicles_total=lpr_success + lpr_failed,
+        lpr_success=lpr_success,
+        lpr_failed=lpr_failed,
+        avg_confidence=avg_confidence,
+    )
+
+
 def _persist_lpr_passage_event(
     db: Session,
     *,
@@ -376,14 +460,84 @@ def _persist_lpr_passage_event(
         event_type="LPR_PASSAGE",
         severity_level=severity_level,
         license_plate=plate_text,
-        object_class=detection.get("vietnamese_name")
-        or OBJECT_VIETNAMESE_NAMES.get(cls_name, cls_name),
+        # Xem chú thích ở `persist_zone_violation_event`: lưu khoá lớp, không lưu
+        # tên hiển thị.
+        object_class=cls_name,
         confidence=plate_confidence,
         bbox=detection.get("bbox"),
         crop_image_url=f"/media/crops/crop_{plate_text.replace('.', '_')}.jpg",
         video_clip_url=video_clip_url,
     )
     return EventRepository(db).create(event)
+
+
+@dataclass
+class _GatePassage:
+    """Trạng thái của lượt xe đang diễn ra trước ống kính camera cổng."""
+
+    #: Lần cuối nhìn thấy một chiếc xe trong làn vào.
+    vehicle_seen_at: float | None = None
+    #: Đã đọc được biển số nào trong chính lượt này chưa.
+    plate_read: bool = False
+
+
+# Trạng thái lượt xe theo từng camera.
+#
+# "Không đọc được" phải đếm theo **lượt xe**, không theo thời gian. Ở camera ANPR, tấm
+# biển chỉ nằm trong tầm đọc được vài giây mỗi lượt: lúc xe mới vào thì biển còn quá
+# xiên, lúc xe đi khỏi thì đã khuất. Phần lớn thời gian là "có xe mà chưa đọc được
+# biển", nên bộ đếm chạy theo cooldown thời gian sẽ cộng liên tục — đo trên máy đang
+# chạy: 154 lượt hỏng trong 41 phút, trên một clip chỉ có 5 chiếc xe và cả 5 đều đọc
+# được. Chỉ khi một lượt xe khép lại mà suốt lượt đó không đọc nổi biển nào thì mới
+# thực sự là một lượt hỏng.
+_gate_passages: dict[str, _GatePassage] = {}
+
+# Vắng bóng xe quá ngần này giây thì coi như lượt xe vừa rồi đã khép lại.
+#
+# Không đặt ngắn được. YOLO mất dấu chính chiếc xe nó vừa thấy ngay giữa lượt: khi xe
+# áp sát bốt và phủ gần trọn khung hình, đo trên clip cổng có quãng 11 giây liền không
+# ra detection nào. Ngưỡng ngắn hơn quãng đó sẽ chẻ một chiếc xe thành mấy lượt, và
+# những mảnh không chứa khoảnh khắc đọc được biển bị tính là lượt hỏng. Đo trên một
+# vòng clip với cơ sở dữ liệu sạch: mức 3 giây cho 1 lượt hỏng giả, mức 15 giây cho 0
+# — trong khi cả 5 chiếc xe đều đọc thành công.
+#
+# Đánh đổi: hai chiếc xe nối đuôi nhau cách dưới 15 giây sẽ bị gộp làm một lượt. Chấp
+# nhận được, vì "đọc được" đếm theo biển số phân biệt nên không mất xe nào; chỉ con số
+# "không đọc được" là kém nhạy đi.
+_PASSAGE_GAP_SECONDS = 15.0
+
+
+def _close_finished_passage(db: Session, camera_id: str, now: float) -> None:
+    """Khép lượt xe trước đó và tính một lượt hỏng nếu suốt lượt không đọc được biển."""
+    passage = _gate_passages.get(camera_id)
+    if passage is None or passage.vehicle_seen_at is None:
+        return
+    if now - passage.vehicle_seen_at <= _PASSAGE_GAP_SECONDS:
+        return
+
+    if not passage.plate_read:
+        _update_gate_kpi(db, recognized=False, confidence=0.0)
+    _gate_passages[camera_id] = _GatePassage()
+
+
+def _whole_frame_detection(detections: list[dict[str, Any]]) -> dict[str, Any]:
+    """Ngữ cảnh cho một lượt quét biển trên cả khung hình, khi YOLO không thấy xe nào.
+
+    `bbox` để None nghĩa là "quét cả khung". Loại xe lấy từ detection xe bất kỳ còn sót
+    lại trong frame (thường là phần đuôi xe lọt ra ngoài làn); không có thì ghi 'truck'
+    — biển vàng ở cổng cảng là biển xe kinh doanh vận tải, nên đây là suy luận có căn cứ
+    chứ không phải giá trị bịa, và `bbox`/`zone_id` để trống nói rõ rằng lượt này không
+    gắn với một bbox quan sát được.
+    """
+    for detection in detections:
+        if str(detection.get("object_class") or "") in LPR_VEHICLE_CLASSES:
+            return {
+                "object_class": detection.get("object_class"),
+                "zone_id": detection.get("zone_id"),
+                "zone_name": detection.get("zone_name"),
+                "bbox": None,
+            }
+    return {"object_class": "truck", "zone_id": None, "zone_name": None, "bbox": None}
 
 
 def persist_gate_lpr_events(
@@ -401,12 +555,35 @@ def persist_gate_lpr_events(
 
     trigger_boxes = settings.gate_lpr_trigger_boxes()
     persisted: list[EventModel] = []
-    for detection in detections:
+    lane_detections = [
+        detection
+        for detection in detections
+        if str(detection.get("object_class") or "") in LPR_VEHICLE_CLASSES
+        and _is_inbound_lane(detection.get("zone_name"))
+    ]
+
+    # Camera cổng ngắm ngang tầm cản trước, nên đúng lúc tấm biển to và rõ nhất thì
+    # chiếc xe lại phủ gần trọn khung hình và YOLO ngừng nhận ra nó là xe. Đo trên clip:
+    # lượt xe 35H-093.47 có biển đọc được suốt t=28-36s nhưng detection đầu tiên mãi
+    # t=37s mới xuất hiện — bám theo bbox xe thì mất trắng lượt đó.
+    #
+    # Nên khi không có xe nào trong làn, vẫn quét biển trong vùng đã cấu hình. Chỉ làm
+    # được vậy vì camera này chỉ ngắm đúng một làn vào: mọi tấm biển trong khung đều
+    # thuộc một lượt xe qua cổng, không có làn khác để lẫn.
+    observed_vehicle = bool(lane_detections)
+
+    # Chốt lượt xe trước đó nếu làn đã vắng bóng đủ lâu, rồi mở/nối lượt hiện tại.
+    now = time.monotonic()
+    _close_finished_passage(db, camera_id, now)
+    passage = _gate_passages.setdefault(camera_id, _GatePassage())
+    if observed_vehicle:
+        passage.vehicle_seen_at = now
+
+    if not lane_detections:
+        lane_detections = [_whole_frame_detection(detections)]
+
+    for detection in lane_detections:
         cls_name = str(detection.get("object_class") or "")
-        if cls_name not in LPR_VEHICLE_CLASSES:
-            continue
-        if not _is_inbound_lane(detection.get("zone_name")):
-            continue
 
         # Ô ngắm sẵn của làn được ưu tiên; làn chưa đo được toạ độ thì lùi về quét cản va.
         trigger_box = trigger_boxes.get(str(detection.get("zone_id")))
@@ -417,13 +594,22 @@ def persist_gate_lpr_events(
         plate_confidence = reading.confidence
 
         if not plate_text:
-            # Đọc hỏng vẫn là một lượt xe qua cổng, phải vào KPI "Không đọc được".
-            # Không có biển số để làm khoá chống trùng nên dùng (làn, loại xe): một
-            # chiếc xe đứng nhiều frame chỉ được đếm hỏng đúng một lần mỗi cooldown.
-            if not lpr_event_manager.is_duplicate(
-                camera_id, detection.get("zone_id"), f"LPR_UNREADABLE:{cls_name}"
-            ):
-                _update_gate_kpi(db, recognized=False, confidence=0.0)
+            # Không cộng gì ở đây. Lượt hỏng chỉ được chốt khi cả lượt xe khép lại mà
+            # không đọc nổi biển nào — xem `_close_finished_passage`.
+            continue
+
+        passage.plate_read = True
+
+        # Đòi nhiều frame cùng đọc ra một chuỗi trước khi công nhận nó (BUG-003).
+        # Phải đứng TRƯỚC cooldown: `is_duplicate()` ghi luôn dấu thời gian vào cache
+        # ngay ở lần gọi đầu, nên nếu để sau thì lượt đọc thứ hai của cùng biển bị chặn
+        # và không bao giờ gom đủ phiếu.
+        if not plate_vote_tracker.record(
+            camera_id,
+            plate_text,
+            required_reads=settings.LPR_MIN_CONFIRMATIONS,
+            window_seconds=settings.LPR_CONFIRMATION_WINDOW_SECONDS,
+        ):
             continue
 
         # Chống trùng theo biển số bất kể làn: cùng một lượt xe có thể lấn qua ranh
@@ -625,7 +811,7 @@ def video_feed(
         )
 
     video_path = _resolve_video_path_or_503(camera_id)
-    pipeline = get_camera_pipeline(camera_id, vision_pipeline, video_path)
+    pipeline = get_camera_pipeline(camera_id, get_pipeline_for_camera(camera_id), video_path)
     zone_state = zone_cache_service.get_or_load(db, camera_id)
     pipeline.update_zones(list(zone_state.zones), zone_state.zone_version)
 
@@ -696,7 +882,7 @@ def get_live_detections(
     """
     video_path = _resolve_video_path_or_503(camera_id)
     zone_state = zone_cache_service.get_or_load(db, camera_id)
-    pipeline = get_camera_pipeline(camera_id, vision_pipeline, video_path)
+    pipeline = get_camera_pipeline(camera_id, get_pipeline_for_camera(camera_id), video_path)
     pipeline.update_zones(list(zone_state.zones), zone_state.zone_version)
     try:
         snapshot = pipeline.get_latest_snapshot()

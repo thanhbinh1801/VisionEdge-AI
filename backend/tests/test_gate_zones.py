@@ -30,12 +30,31 @@ def db_session(test_engine):
     connection.close()
 
 def test_gate_zones_seeded(db_session):
+    """Camera cổng có đúng một làn vào, cộng một zone đánh dấu khu bốt.
+
+    Bộ cũ seed 'Làn IN 1' và 'Làn IN 2' theo camera toàn cảnh hai làn. Camera biển số
+    hiện dùng (`Cvao-Bien-L2`) chỉ ngắm một làn, nên zone làn thứ hai sẽ luôn rỗng —
+    xem ghi chú ở docs/contracts/db/schema.sql.
+    """
     repo = ZoneRepository(db_session)
     gate_zones = repo.get_by_camera("GATE-01")
     assert len(gate_zones) >= 2
     zone_names = [z.name for z in gate_zones]
-    assert "Làn IN 1" in zone_names
-    assert "Làn IN 2" in zone_names
+    assert "Làn IN" in zone_names
+    assert "Bốt kiểm soát" in zone_names
+
+
+def test_only_one_gate_zone_feeds_the_lpr_pipeline(db_session):
+    """Đúng một zone của cổng được `_is_inbound_lane()` nhận là làn vào.
+
+    Zone khu bốt phải nằm ngoài luồng LPR: chỗ đó có bình cứu hoả và vật màu vàng trên
+    cột, đủ giống một tấm biển để tốn công OCR mỗi frame.
+    """
+    from backend.app.api.v1.events import _is_inbound_lane
+
+    gate_zones = ZoneRepository(db_session).get_by_camera("GATE-01")
+    inbound = [z.name for z in gate_zones if _is_inbound_lane(z.name)]
+    assert inbound == ["Làn IN"]
 
 def test_gate_zone_create_and_update(db_session):
     repo = ZoneRepository(db_session)

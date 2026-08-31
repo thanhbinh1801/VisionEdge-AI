@@ -113,14 +113,25 @@ export interface AnnotationSample {
   session?: number;
 }
 
+/** Một clip bằng chứng trả kèm câu trả lời của trợ lý. */
+export interface AssistantClip {
+  event_id?: string | null;
+  url: string;
+  timestamp?: string | null;
+  camera?: string | null;
+  label?: string | null;
+}
+
 export interface AIChatMessage {
   id: string;
   role: 'user' | 'ai';
   text: string;
   /** Câu SQL do backend sinh ra, hiển thị để người dùng kiểm chứng câu trả lời. */
   sqlQuery?: string;
-  /** URL clip 10s bằng chứng do backend trả về; mở bằng <VideoModal>. */
-  clipUrl?: string;
+  /** Các clip 10s bằng chứng của đúng những sự kiện có trong câu trả lời. */
+  clips?: AssistantClip[];
+  /** `QuerySpec` backend đã dùng cho lượt này; gửi lại để hỏi tiếp. */
+  spec?: Record<string, unknown> | null;
   /** `pending` khi đang chờ backend, `error` khi gọi thất bại. */
   status?: 'pending' | 'error';
 }
