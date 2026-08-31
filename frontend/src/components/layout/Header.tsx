@@ -40,7 +40,7 @@ export const Header: React.FC<HeaderProps> = ({ isMuted = false, onToggleMute })
       <div className="flex items-center space-x-4">
         <div className="flex items-center space-x-2 text-xs text-emerald-400 bg-emerald-950/60 px-3 py-1.5 rounded-full border border-emerald-800/80">
           <Radio className="w-4 h-4 animate-pulse" aria-hidden="true" />
-          <span className="font-medium font-mono">YOLO-World & OCR | FPS: 15.2 | Latency: 42ms</span>
+          <span className="font-medium font-mono">YOLOv11s & OCR | FPS: 15.2 | Latency: 42ms</span>
         </div>
 
         <div className="flex items-center space-x-2 text-xs text-slate-300 bg-slate-900 px-3 py-1.5 rounded-lg border border-slate-800 font-mono">

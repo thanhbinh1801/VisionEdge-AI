@@ -1,7 +1,7 @@
 import logging
 import os
 import threading
-from typing import Any, Dict, List, Tuple, Union
+from typing import Any, ClassVar, Dict, List, Tuple, Union
 
 logger = logging.getLogger(__name__)
 
@@ -17,11 +17,24 @@ CANONICAL_8_OBJECT_CLASSES = [
     "person"
 ]
 
+AREA_OBJECT_CLASSES = [
+    "container",
+    "shipping_container",
+    "truck",
+    "container_truck",
+    "forklift",
+    "crane",
+    "car",
+    "motorbike",
+    "bicycle",
+    "person",
+]
+
 OBJECT_VIETNAMESE_NAMES = {
-    # "Container" chứ không phải "Xe container": lớp này bao cả xe chở container lẫn
-    # thùng container xếp tĩnh trong bãi, vì taxonomy 8 lớp không tách hai thứ đó ra.
     "container": "Container",
+    "shipping_container": "Thùng container",
     "truck": "Xe tải",
+    "container_truck": "Xe tải container",
     "forklift": "Xe nâng",
     "crane": "Xe cẩu",
     "car": "Xe con",
@@ -30,71 +43,15 @@ OBJECT_VIETNAMESE_NAMES = {
     "person": "Người"
 }
 
-# Ánh xạ nhãn COCO sang 8 lớp chuẩn. Chỉ dùng cho nhánh dự phòng yolov8n (COCO 80 lớp
-# không có container/forklift/crane); YOLO-World vốn đã trả thẳng tên lớp chuẩn.
-#
-# "train" -> "container" là xấp xỉ có chủ ý: mô hình COCO thường gán nhãn train cho xe
-# đầu kéo chở container vì hình khối hộp dài giống nhau. Trước đây bảng này còn có
-# "bench" -> "forklift", một suy diễn vô căn cứ khiến ghế băng và mọi vật thể ngang tầm
-# bị báo thành xe nâng — đã bỏ. Không thêm ánh xạ mới nếu không có căn cứ hình học.
-COCO_TO_CANONICAL = {
-    "train": "container",
+# Nhãn trả về từ YOLOv11s finetune. Runtime không còn prompt/open-vocabulary.
+FINETUNE_CLASS_TO_CANONICAL = {
+    "shipping container": "shipping_container",
+    "freight container": "shipping_container",
+    "cargo container box": "shipping_container",
+    "container": "shipping_container",
+    "container truck": "container",
+    "container_truck": "container",
     "truck": "truck",
-    "bus": "truck",
-    "car": "car",
-    "motorcycle": "motorbike",
-    "bicycle": "bicycle",
-    "person": "person",
-}
-
-# Prompt đưa vào YOLO-World, tách khỏi tên lớp chuẩn vì hai thứ phục vụ hai mục đích
-# khác nhau: tên lớp là khoá dữ liệu ổn định (CSDL, API, UI đều bám vào), còn prompt là
-# chuỗi ngôn ngữ nạp cho CLIP và phải chỉnh theo cảnh thật.
-#
-# Trước đây `set_classes()` nhận thẳng 8 tên lớp trần, và kết quả đo trên footage cảng
-# (backend/scripts/render_zone_overlay.py) là: **0 detection trên toàn bộ bãi Bãi Kiểm**
-# — cả một bãi đầy container lẫn một chiếc reach stacker giữa khung hình đều bị bỏ qua.
-#
-# Các prompt dưới đây được chọn bằng đo đạc, không phải phỏng đoán:
-#   - "cargo container box" bắt được container; "shipping container" thì không.
-#   - reach stacker chỉ chịu khớp với "yellow heavy machinery vehicle" (khớp cả khi xe
-#     màu xanh — CLIP bám hình dáng máy công trình nhiều hơn bám từ "yellow").
-#   - "semi trailer truck" nhận xe đầu kéo ở cổng với 0.89, so với 0.40 của "truck".
-#   - Prompt dạng câu dài ("a tall gantry crane at a port") làm nổ false positive:
-#     57 box trên một khung hình. Giữ prompt ở mức cụm danh từ ngắn.
-#
-# Hai prompt đã thử và bị loại, đừng thêm lại:
-#   - "truck trailer": 33 box @0.97 trên một khung hình Xưởng An Ninh.
-#   - "flatbed trailer": cứu được chiếc xe ở Làn IN 1 (0.27 -> 0.40) nhưng lại nuốt
-#     luôn reach stacker với 0.74, biến xe nâng thành xe tải. Đánh đổi không đáng.
-CANONICAL_CLASS_PROMPTS = {
-    "container": ["cargo container box"],
-    "truck": ["semi trailer truck", "truck"],
-    "forklift": ["forklift", "reach stacker", "yellow heavy machinery vehicle"],
-    "crane": ["crane", "gantry crane"],
-    "car": ["car"],
-    "motorbike": ["motorcycle"],
-    "bicycle": ["bicycle"],
-    "person": ["person"],
-}
-
-# Rich Open-Vocabulary Prompts for Port & Industrial Yard Equipment (CR-001)
-RICH_CLASS_PROMPTS = [
-    "shipping container", "freight container", "container",
-    "container truck", "heavy cargo truck", "semi truck", "truck",
-    "blue reach stacker", "container reach stacker", "reach stacker", "container handler", "heavy forklift", "forklift",
-    "mobile crane truck", "container crane", "port crane", "gantry crane", "crane",
-    "car", "automobile", "pickup truck",
-    "motorbike", "motorcycle", "scooter",
-    "bicycle", "bike",
-    "person", "worker", "pedestrian",
-    "light pole", "lamp post", "utility pole", "pole", "column"
-]
-
-PROMPT_TO_CANONICAL = {
-    "shipping container": "container",
-    "freight container": "container",
-    "container truck": "truck",
     "heavy cargo truck": "truck",
     "semi truck": "truck",
     "blue reach stacker": "forklift",
@@ -140,19 +97,40 @@ CRANE_RAW_CLASSES = {
 
 class AIVisionPipeline:
     """
-    Ultralytics YOLO-World v2 Engine & Ray-Casting Point-in-Polygon Evaluator.
+    Ultralytics YOLOv11s finetuned engine & zone evaluator.
     Loads weight models from backend/app/ai/weights/.
-    Supports 8 Object Classes (CR-001) & Open-Vocabulary Custom Object Detection.
+    Supports the area-monitoring classes exported by the finetuned checkpoint.
     """
 
     # Ngưỡng mặc định khi gọi trực tiếp mà không truyền cấu hình.
     # Giá trị thật lúc chạy lấy từ DETECTION_CONFIDENCE_THRESHOLD trong .env.
     DEFAULT_CONFIDENCE_THRESHOLD = 0.30
+    DEFAULT_INFERENCE_THRESHOLD = 0.25
+    DEFAULT_APPLICATION_THRESHOLD = 0.50
+    DEFAULT_PER_CLASS_APPLICATION_THRESHOLDS: ClassVar[dict[str, float]] = {
+        "person": 0.45,
+        "motorbike": 0.45,
+        "bicycle": 0.45,
+        "forklift": 0.50,
+        "truck": 0.50,
+        "container_truck": 0.50,
+        "car": 0.50,
+        "crane": 0.50,
+        "container": 0.55,
+        "shipping_container": 0.55,
+    }
+    FOOTPRINT_OVERLAP_CLASSES: ClassVar[set[str]] = {"forklift", "truck", "container_truck", "car", "crane"}
+    BOTTOM_CENTER_CLASSES: ClassVar[set[str]] = {"person", "motorbike", "bicycle"}
+    BBOX_OVERLAP_CLASSES: ClassVar[set[str]] = {"shipping_container"}
+    DETECT_ONLY_CLASSES: ClassVar[set[str]] = {"container", "shipping_container"}
+    ZONE_RULE_ALIASES: ClassVar[dict[str, set[str]]] = {
+        "container_truck": {"container"},
+    }
+    DEFAULT_FOOTPRINT_OVERLAP_RATIO = 0.15
+    DEFAULT_CONTAINER_OVERLAP_RATIO = 0.25
 
     # Ultralytics mặc định iou=0.7, quá lỏng với cảnh này: một xe đầu kéo ở cổng cho ra
-    # hai box lồng nhau (0.89 bao cả đầu kéo, 0.58 bao riêng rơ-moóc, IoU ~0.76) và cả
-    # hai cùng lọt lên UI. Kèm agnostic_nms để gộp cả box trùng khác nhãn — với nhiều
-    # prompt cho cùng một lớp, chuyện hai prompt cùng bắt một vật là bình thường.
+    # hai box lồng nhau (0.89 bao cả xe, 0.58 bao riêng rơ-moóc, IoU ~0.76).
     DEFAULT_IOU_THRESHOLD = 0.5
 
     def __init__(
@@ -171,26 +149,13 @@ class AIVisionPipeline:
             if confidence_threshold is None
             else float(confidence_threshold)
         )
+        self.inference_threshold = min(self.DEFAULT_INFERENCE_THRESHOLD, self.confidence_threshold)
+        self.application_threshold = self.DEFAULT_APPLICATION_THRESHOLD
+        self.per_class_application_thresholds = dict(self.DEFAULT_PER_CLASS_APPLICATION_THRESHOLDS)
         self.model = None
-        self.model_type = "yolo-world"
+        self.model_type = "yolov11s-finetune"
         self.classes = list(CANONICAL_8_OBJECT_CLASSES)
-        # `prompts` là thứ nạp vào model; `prompt_to_class` đưa nhãn model trả về ngược
-        # lại tên lớp chuẩn. Xem CANONICAL_CLASS_PROMPTS để biết vì sao phải tách đôi.
-        self.prompts = []
-        self.prompt_to_class = {}
-        self._rebuild_prompts()
         self._initialize_model()
-
-    def _rebuild_prompts(self):
-        """Dựng lại danh sách prompt phẳng và bảng tra ngược từ self.classes."""
-        self.prompts = []
-        self.prompt_to_class = {}
-        for cls_name in self.classes:
-            # Lớp tuỳ chỉnh do người dùng thêm chưa có prompt riêng, dùng chính tên nó.
-            for prompt in CANONICAL_CLASS_PROMPTS.get(cls_name, [cls_name]):
-                if prompt not in self.prompt_to_class:
-                    self.prompts.append(prompt)
-                self.prompt_to_class[prompt.lower()] = cls_name
 
     def _weights_dir(self) -> str:
         current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -229,59 +194,24 @@ class AIVisionPipeline:
         model_source = self._resolve_model_path()
         logger.info(f"Attempting to load model weights from: {model_source}")
 
-        # 1. Try loading YOLOWorld
-        if "world" in os.path.basename(model_source).lower():
-            try:
-                from ultralytics import YOLOWorld
-                self.model = YOLOWorld(model_source)
-                self.model.set_classes(self.prompts)
-                self.model_type = "yolo-world"
-                logger.info(f"Loaded YOLO-World v2 model with rich prompts from: {model_source}")
-                return
-            except Exception as e:
-                logger.warning(f"YOLO-World load error: {e}")
-
-        # 2. Weights YOLO thường (checkpoint finetune như sentri-yolo11s.pt, hoặc
-        # yolov8n.pt). Nạp thẳng file đã yêu cầu — trước đây nhánh này bỏ qua
-        # model_source và luôn nạp yolov8n.pt, nên mọi checkpoint tự huấn luyện đều
-        # bị nuốt im lặng và hệ thống chạy bằng model COCO mặc định.
         try:
             from ultralytics import YOLO
             self.model = YOLO(model_source)
-            self.model_type = "yolo"
-            logger.info(f"Loaded YOLO model from: {model_source}")
+            self.model_type = "yolov11s-finetune"
+            logger.info(f"Loaded YOLOv11s finetuned model from: {model_source}")
             return
         except Exception as e:
-            logger.warning(f"YOLO model load error ({model_source}): {e}")
-
-        # 3. Lưới an toàn cuối: yolov8n.pt để hệ thống còn chạy được khi weights chính
-        # hỏng hoặc thiếu. Lớp phát hiện sẽ nghèo hơn, log lại để không âm thầm.
-        try:
-            from ultralytics import YOLO
-            yolov8n_path = self._resolve_model_path("yolov8n.pt")
-            self.model = YOLO(yolov8n_path)
-            self.model_type = "yolov8"
-            logger.warning(
-                f"Lùi về weights dự phòng {yolov8n_path} vì không nạp được {model_source}."
-            )
-            return
-        except Exception as e:
-            logger.warning(f"YOLOv8 model load fallback error: {e}")
+            logger.error(f"YOLOv11s finetuned model load error ({model_source}): {e}")
 
         self.model = None
 
     def update_custom_classes(self, new_classes: List[str]):
+        """Compatibility no-op: finetuned weights define runtime detection classes."""
         combined_classes = list(self.classes)
         for cls_name in new_classes:
             if cls_name not in combined_classes:
                 combined_classes.append(cls_name)
         self.classes = combined_classes
-        self._rebuild_prompts()
-        if self.model and self.model_type == "yolo-world":
-            try:
-                self.model.set_classes(self.prompts)
-            except Exception as e:
-                logger.error(f"Error setting custom classes: {e}")
 
     @staticmethod
     def normalize_point(point: Union[Dict[str, float], Tuple[float, float], List[float]]) -> Tuple[float, float]:
@@ -330,6 +260,13 @@ class AIVisionPipeline:
 
         return inside
 
+    @classmethod
+    def class_application_threshold(cls, cls_name: str) -> float:
+        return cls.DEFAULT_PER_CLASS_APPLICATION_THRESHOLDS.get(
+            cls_name,
+            cls.DEFAULT_APPLICATION_THRESHOLD,
+        )
+
     def evaluate_bbox_center_in_zone(
         self,
         bbox: Tuple[float, float, float, float],
@@ -347,34 +284,170 @@ class AIVisionPipeline:
         return self.point_in_polygon((cx, cy), polygon_points)
 
     @staticmethod
-    def map_raw_class_to_canonical(raw_cls_name: str) -> str | None:
-        # Dataset tự huấn luyện đặt tên lớp kiểu snake_case ("shipping_container",
-        # "container_truck") còn các bảng ánh xạ dưới đây viết cách bằng dấu cách.
-        # Chuẩn hoá một lần ở đây thay vì nhân đôi mọi khoá trong từng bảng.
-        raw_cls_lower = raw_cls_name.lower().strip().replace("_", " ")
-        cls_name = PROMPT_TO_CANONICAL.get(raw_cls_lower, COCO_TO_CANONICAL.get(raw_cls_lower, raw_cls_lower))
+    def _normalize_bbox_xyxy(
+        bbox: Tuple[float, float, float, float] | List[float],
+    ) -> tuple[float, float, float, float]:
+        b0, b1, b2, b3 = [float(v) for v in bbox]
+        if b2 >= b0 and b3 >= b1:
+            x1, y1, x2, y2 = b0, b1, b2, b3
+        else:
+            x1, y1, x2, y2 = b0, b1, b0 + b2, b1 + b3
+        max_coord = max(abs(x1), abs(y1), abs(x2), abs(y2))
+        if max_coord > 1.0:
+            x1, y1, x2, y2 = x1 / 100.0, y1 / 100.0, x2 / 100.0, y2 / 100.0
+        x1, x2 = sorted((max(0.0, min(1.0, x1)), max(0.0, min(1.0, x2))))
+        y1, y2 = sorted((max(0.0, min(1.0, y1)), max(0.0, min(1.0, y2))))
+        return (x1, y1, x2, y2)
+
+    @classmethod
+    def _bbox_bottom_center(cls, bbox: Tuple[float, float, float, float] | List[float]) -> tuple[float, float]:
+        x1, _y1, x2, y2 = cls._normalize_bbox_xyxy(bbox)
+        return ((x1 + x2) / 2.0, y2)
+
+    @classmethod
+    def _bbox_footprint_rect(cls, bbox: Tuple[float, float, float, float] | List[float]) -> tuple[float, float, float, float]:
+        x1, y1, x2, y2 = cls._normalize_bbox_xyxy(bbox)
+        height = max(0.0, y2 - y1)
+        return (x1, max(y1, y2 - height * 0.35), x2, y2)
+
+    @staticmethod
+    def _normalize_polygon(polygon_points: List[Any]) -> list[tuple[float, float]]:
+        raw_poly = [AIVisionPipeline.normalize_point(p) for p in polygon_points or []]
+        if not raw_poly:
+            return []
+        max_coord = max(max(abs(pt[0]), abs(pt[1])) for pt in raw_poly)
+        if max_coord > 1.0:
+            return [(pt[0] / 100.0, pt[1] / 100.0) for pt in raw_poly]
+        return raw_poly
+
+    @staticmethod
+    def _clip_polygon_against_rect(
+        polygon: list[tuple[float, float]],
+        rect: tuple[float, float, float, float],
+    ) -> list[tuple[float, float]]:
+        x_min, y_min, x_max, y_max = rect
+
+        def clip_edge(points, inside, intersect):
+            if not points:
+                return []
+            output = []
+            previous = points[-1]
+            previous_inside = inside(previous)
+            for current in points:
+                current_inside = inside(current)
+                if current_inside:
+                    if not previous_inside:
+                        output.append(intersect(previous, current))
+                    output.append(current)
+                elif previous_inside:
+                    output.append(intersect(previous, current))
+                previous = current
+                previous_inside = current_inside
+            return output
+
+        def vertical_intersection(a, b, x):
+            ax, ay = a
+            bx, by = b
+            if bx == ax:
+                return (x, ay)
+            t = (x - ax) / (bx - ax)
+            return (x, ay + t * (by - ay))
+
+        def horizontal_intersection(a, b, y):
+            ax, ay = a
+            bx, by = b
+            if by == ay:
+                return (ax, y)
+            t = (y - ay) / (by - ay)
+            return (ax + t * (bx - ax), y)
+
+        clipped = polygon
+        clipped = clip_edge(clipped, lambda p: p[0] >= x_min, lambda a, b: vertical_intersection(a, b, x_min))
+        clipped = clip_edge(clipped, lambda p: p[0] <= x_max, lambda a, b: vertical_intersection(a, b, x_max))
+        clipped = clip_edge(clipped, lambda p: p[1] >= y_min, lambda a, b: horizontal_intersection(a, b, y_min))
+        clipped = clip_edge(clipped, lambda p: p[1] <= y_max, lambda a, b: horizontal_intersection(a, b, y_max))
+        return clipped
+
+    @staticmethod
+    def _polygon_area(points: list[tuple[float, float]]) -> float:
+        if len(points) < 3:
+            return 0.0
+        area = 0.0
+        for index, (x1, y1) in enumerate(points):
+            x2, y2 = points[(index + 1) % len(points)]
+            area += x1 * y2 - x2 * y1
+        return abs(area) / 2.0
+
+    @classmethod
+    def _rect_polygon_overlap_ratio(
+        cls,
+        rect: tuple[float, float, float, float],
+        polygon_points: List[Any],
+    ) -> float:
+        x1, y1, x2, y2 = rect
+        rect_area = max(0.0, x2 - x1) * max(0.0, y2 - y1)
+        if rect_area <= 0:
+            return 0.0
+        polygon = cls._normalize_polygon(polygon_points)
+        clipped = cls._clip_polygon_against_rect(polygon, rect)
+        return max(0.0, min(1.0, cls._polygon_area(clipped) / rect_area))
+
+    def evaluate_bbox_class_aware_in_zone(
+        self,
+        bbox: Tuple[float, float, float, float] | List[float],
+        polygon_points: List[Any],
+        object_class: str,
+    ) -> dict[str, Any]:
+        if object_class in self.DETECT_ONLY_CLASSES:
+            return {
+                "inside": False,
+                "zone_eval_method": "none",
+                "zone_overlap_ratio": None,
+            }
+        if object_class in self.BOTTOM_CENTER_CLASSES:
+            point = self._bbox_bottom_center(bbox)
+            return {
+                "inside": self.point_in_polygon(point, polygon_points),
+                "zone_eval_method": "bottom_center",
+                "zone_overlap_ratio": None,
+            }
+        if object_class in self.FOOTPRINT_OVERLAP_CLASSES:
+            rect = self._bbox_footprint_rect(bbox)
+            ratio = self._rect_polygon_overlap_ratio(rect, polygon_points)
+            return {
+                "inside": ratio >= self.DEFAULT_FOOTPRINT_OVERLAP_RATIO,
+                "zone_eval_method": "footprint_overlap",
+                "zone_overlap_ratio": round(ratio, 4),
+            }
+        if object_class in self.BBOX_OVERLAP_CLASSES:
+            ratio = self._rect_polygon_overlap_ratio(self._normalize_bbox_xyxy(bbox), polygon_points)
+            return {
+                "inside": ratio >= self.DEFAULT_CONTAINER_OVERLAP_RATIO,
+                "zone_eval_method": "bbox_overlap_ratio",
+                "zone_overlap_ratio": round(ratio, 4),
+            }
+        return {
+            "inside": self.evaluate_bbox_center_in_zone(bbox, polygon_points),
+            "zone_eval_method": "center_point_fallback",
+            "zone_overlap_ratio": None,
+        }
+
+    @classmethod
+    def zone_rule_matches_class(cls, object_class: str, rule_classes: list[str] | tuple[str, ...] | set[str]) -> bool:
+        class_set = set(rule_classes or [])
+        return object_class in class_set or bool(cls.ZONE_RULE_ALIASES.get(object_class, set()) & class_set)
+
+    def map_raw_class_to_canonical(self, raw_cls_name: str) -> str | None:
+        raw_key = raw_cls_name.lower().strip()
+        raw_cls_lower = raw_key.replace("_", " ")
+        cls_name = FINETUNE_CLASS_TO_CANONICAL.get(raw_key, FINETUNE_CLASS_TO_CANONICAL.get(raw_cls_lower, raw_cls_lower))
         if cls_name == "IGNORE":
             return None
 
-        if cls_name in CANONICAL_8_OBJECT_CLASSES:
+        if cls_name in AREA_OBJECT_CLASSES:
             return cls_name
-
-        if raw_cls_lower in ("train", "box", "shipping container", "freight container"):
-            return "container"
-        if raw_cls_lower in (
-            "reach stacker",
-            "container handler",
-            "blue reach stacker",
-            "container reach stacker",
-            "mobile crane truck",
-            # "bench" đã bị gỡ khỏi đây cùng lý do đã gỡ khỏi COCO_TO_CANONICAL:
-            # ghế băng không phải xe nâng, và suy diễn này làm mọi vật thể ngang tầm
-            # bị báo thành forklift. Xem test_bench_is_no_longer_mapped_to_forklift.
-            "loader",
-        ):
-            return "forklift"
-        if raw_cls_lower in ("bus", "heavy truck", "cargo truck", "heavy cargo truck", "semi truck"):
-            return "truck"
+        if cls_name in self.classes:
+            return cls_name
         return None
 
     @staticmethod
@@ -394,7 +467,13 @@ class AIVisionPipeline:
         is_very_thin_structure = width_pct <= 4.5 and height_pct >= 12.0 and aspect_ratio >= 3.0
         return is_narrow_tall_structure or is_very_thin_structure
 
-    def process_frame(self, frame_matrix, zones: List[Dict[str, Any]] = None, conf_threshold: float = None) -> List[Dict[str, Any]]:
+    def process_frame(
+        self,
+        frame_matrix,
+        zones: List[Dict[str, Any]] = None,
+        conf_threshold: float = None,
+        inference_threshold: float = None,
+    ) -> List[Dict[str, Any]]:
         """
         Runs YOLO inference on frame matrix and evaluates Ray-Casting PIP zone violations.
         Filters out detections below specified confidence threshold.
@@ -404,26 +483,27 @@ class AIVisionPipeline:
         """
         if conf_threshold is None:
             conf_threshold = self.confidence_threshold
+        if inference_threshold is None:
+            inference_threshold = min(self.inference_threshold, conf_threshold)
         detections = []
         if self.model is not None and frame_matrix is not None:
             try:
                 results = self.model.predict(
                     frame_matrix,
-                    conf=conf_threshold,
+                    conf=inference_threshold,
                     iou=self.DEFAULT_IOU_THRESHOLD,
                     agnostic_nms=True,
                     verbose=False,
                 )
-                # Lớp hợp lệ gồm 8 lớp chuẩn và cả lớp mở do người dùng thêm qua
-                # update_custom_classes(); nếu chỉ nhận 8 lớp thì tính năng open-vocab
-                # của YOLO-World trở thành vô nghĩa vì kết quả bị vứt ngay tại đây.
-                known_classes = set(CANONICAL_8_OBJECT_CLASSES) | set(self.classes)
+                # Lớp hợp lệ là các label đã biết từ checkpoint finetune và taxonomy
+                # vùng bãi; nhãn ngoài danh mục bị bỏ, không đoán bừa.
+                known_classes = set(AREA_OBJECT_CLASSES) | set(self.classes)
 
                 for r in results:
                     boxes = r.boxes
                     for box in boxes:
                         conf = float(box.conf[0])
-                        if conf < conf_threshold:
+                        if conf < inference_threshold:
                             continue
 
                         cls_id = int(box.cls[0])
@@ -435,14 +515,8 @@ class AIVisionPipeline:
                             )
                             continue
 
-                        # YOLO-World trả về chính prompt đã nạp, nên tra bảng prompt
-                        # trước; COCO_TO_CANONICAL chỉ còn dùng cho nhánh yolov8n.
-                        raw_lower = raw_cls_name.lower()
-                        cls_name = self.prompt_to_class.get(raw_lower)
-                        if cls_name is None:
-                            # Nhãn không nằm trong prompt đã nạp: đưa qua bảng ánh xạ
-                            # rộng hơn (COCO, prompt mô tả cảng, nền IGNORE) trước khi bỏ.
-                            cls_name = self.map_raw_class_to_canonical(raw_cls_name)
+                        # Model finetune có thể dùng snake_case hoặc space-separated labels.
+                        cls_name = self.map_raw_class_to_canonical(raw_cls_name)
                         if cls_name is None:
                             continue  # Skip ignored background and unmapped non-canonical noise.
 
@@ -474,27 +548,42 @@ class AIVisionPipeline:
                             continue
 
                         detection = {
+                            "id": None,
                             "object_class": cls_name,
+                            "raw_class": raw_cls_name,
+                            "canonical_class": cls_name,
                             "vietnamese_name": OBJECT_VIETNAMESE_NAMES.get(cls_name, cls_name),
                             "confidence": round(conf, 3),
                             "bbox": pct_bbox,
+                            "bbox_xyxy_norm": [round(v, 4) for v in norm_bbox],
+                            "zone_eval_method": "none",
+                            "zone_overlap_ratio": None,
                             "severity": 1,
                             "zone_violation": False,
                             "zone_name": None,
                             "zone_id": None,
                         }
 
-                        if zones:
+                        if zones and cls_name not in self.DETECT_ONLY_CLASSES:
                             for zone in zones:
                                 polygon = zone.get("vertices") or zone.get("polygon_points") or []
                                 forbidden = zone.get("forbidden_classes") or zone.get("prohibited_object_types") or []
                                 allowed = zone.get("allowed_classes") or zone.get("allowed_object_types") or []
 
-                                is_inside = self.evaluate_bbox_center_in_zone(norm_bbox, polygon)
-                                if is_inside:
-                                    if cls_name in forbidden or (allowed and cls_name not in allowed):
-                                        detection["zone_violation"] = True
-                                        detection["severity"] = zone.get("severity", 3)
+                                evaluation = self.evaluate_bbox_class_aware_in_zone(
+                                    norm_bbox, polygon, cls_name
+                                )
+                                if evaluation["inside"]:
+                                    detection["zone_eval_method"] = evaluation["zone_eval_method"]
+                                    detection["zone_overlap_ratio"] = evaluation["zone_overlap_ratio"]
+                                    is_forbidden = self.zone_rule_matches_class(cls_name, forbidden)
+                                    is_allowed = self.zone_rule_matches_class(cls_name, allowed)
+                                    if is_forbidden or (allowed and not is_allowed):
+                                        if conf >= self.class_application_threshold(cls_name):
+                                            detection["zone_violation"] = True
+                                            detection["severity"] = zone.get("severity", 3)
+                                        else:
+                                            detection["severity"] = 1
                                         detection["zone_name"] = zone.get("name", "Vùng Cấm")
                                         detection["zone_id"] = zone.get("id")
                                         break

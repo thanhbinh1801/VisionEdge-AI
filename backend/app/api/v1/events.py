@@ -1,6 +1,7 @@
 import logging
 import time
 import uuid
+from concurrent.futures import Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -14,14 +15,14 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from backend.app.services.frame_extractor import (
-    VideoSourceUnavailableError,
-    resolve_video_path,
-)
 from backend.app.core.config import settings
 from backend.app.services.alert_dispatcher import alert_dispatcher
 from backend.app.services.area_metadata import build_area_metadata_event
 from backend.app.services.event_manager import EventManager
+from backend.app.services.frame_extractor import (
+    VideoSourceUnavailableError,
+    resolve_video_path,
+)
 from backend.app.services.lpr_engine import lpr_engine
 from backend.app.services.plate_vote import plate_vote_tracker
 from backend.app.services.video_stream import get_camera_pipeline
@@ -34,7 +35,11 @@ from backend.app.services.zone_cache import zone_cache_service
 from backend.database.engine import get_db
 from backend.database.models import Event as EventModel
 from backend.database.models import Vehicle as VehicleModel
-from backend.database.repository import EventRepository, KpiRepository, VehicleRepository
+from backend.database.repository import (
+    EventRepository,
+    KpiRepository,
+    VehicleRepository,
+)
 
 router = APIRouter()
 vision_pipeline = AIVisionPipeline()
@@ -72,8 +77,102 @@ _MAX_STREAM_FRAMES = 0
 #
 # Ẩn ở đây chứ không lọc khỏi snapshot.detections: luật zone, cảnh báo vi phạm, chip
 # metadata và event ghi vào CSDL đều đọc từ danh sách đó và phải giữ nguyên container.
-_MJPEG_HIDDEN_BBOX_CLASSES = {"container"}
+_MJPEG_HIDDEN_BBOX_CLASSES = {"shipping_container"}
+_DETECT_ONLY_CLASSES = {"container", "shipping_container"}
 _event_telegram_status_cache: dict[str, dict[str, Any]] = {}
+_ALERT_WORKER_COUNT = 2
+_alert_executor = ThreadPoolExecutor(
+    max_workers=_ALERT_WORKER_COUNT,
+    thread_name_prefix="area-alert-evidence",
+)
+_alert_background_jobs: set[Future] = set()
+
+
+def _track_alert_job(future: Future) -> None:
+    _alert_background_jobs.add(future)
+
+    def cleanup(done: Future) -> None:
+        _alert_background_jobs.discard(done)
+        try:
+            done.result()
+        except Exception:
+            logger.exception("Background alert/evidence job failed.")
+
+    future.add_done_callback(cleanup)
+
+
+def _wait_for_background_alert_jobs(timeout: float | None = None) -> None:
+    """Test hook: wait for currently queued alert/evidence jobs."""
+    jobs = list(_alert_background_jobs)
+    if jobs:
+        wait(jobs, timeout=timeout)
+
+
+def _run_violation_evidence_alert_job(
+    *,
+    event_id: str,
+    camera_id: str,
+    event_timestamp: datetime,
+    source_video_path: str | None,
+    source_timestamp_seconds: float | None,
+    event_payload: dict[str, Any],
+) -> None:
+    try:
+        if source_timestamp_seconds is None:
+            raise ValueError("Missing source_timestamp_seconds for violation evidence clip.")
+        video_clip_url = event_manager.slice_10s_ring_buffer_clip(
+            camera_id,
+            timestamp=event_timestamp.timestamp(),
+            source_video_path=source_video_path or resolve_video_path(camera_id),
+            source_timestamp_seconds=source_timestamp_seconds,
+            overwrite_existing=True,
+        )
+        event_payload["video_clip_url"] = video_clip_url
+    except Exception as exc:  # noqa: BLE001 - background evidence failures must not block realtime alerts
+        logger.warning("Không cắt được clip chứng cứ cho event %s: %s", event_id, exc)
+        _event_telegram_status_cache[event_id] = {
+            "status": "failed",
+            "error": "VIDEO_CLIP_UNAVAILABLE",
+            "dispatched_at": None,
+        }
+        return
+
+    try:
+        dispatch_res = alert_dispatcher.send_telegram_notification_sync(event_payload)
+        _event_telegram_status_cache[event_id] = dispatch_res
+    except Exception as exc:  # noqa: BLE001 - Telegram failures are isolated from event persistence
+        logger.error(f"Telegram notification dispatch exception for event {event_id}: {exc}")
+        _event_telegram_status_cache[event_id] = {
+            "status": "failed",
+            "error": "NETWORK_ERROR",
+            "dispatched_at": None,
+        }
+
+
+def _schedule_violation_evidence_alert_job(
+    *,
+    event_id: str,
+    camera_id: str,
+    event_timestamp: datetime,
+    source_video_path: str | None,
+    source_timestamp_seconds: float | None,
+    event_payload: dict[str, Any],
+) -> None:
+    _event_telegram_status_cache[event_id] = {
+        "status": "pending",
+        "error": None,
+        "dispatched_at": None,
+    }
+    future = _alert_executor.submit(
+        _run_violation_evidence_alert_job,
+        event_id=event_id,
+        camera_id=camera_id,
+        event_timestamp=event_timestamp,
+        source_video_path=source_video_path,
+        source_timestamp_seconds=source_timestamp_seconds,
+        event_payload=dict(event_payload),
+    )
+    _track_alert_job(future)
 
 def _resolve_video_path_or_503(camera_id: str) -> str:
     """Không có nguồn video là lỗi cấu hình/hạ tầng, không phải crash của server.
@@ -174,6 +273,8 @@ def _legacy_detection_from_metadata_object(item: dict[str, Any]) -> dict[str, An
     return {
         "id": item.get("track_id"),
         "object_class": item.get("object_class"),
+        "raw_class": item.get("raw_class"),
+        "canonical_class": item.get("canonical_class") or item.get("object_class"),
         "vietnamese_name": item.get("display_name") or OBJECT_VIETNAMESE_NAMES.get(item.get("object_class", ""), item.get("object_class")),
         "label": item.get("display_name") or OBJECT_VIETNAMESE_NAMES.get(item.get("object_class", ""), item.get("object_class")),
         "confidence": item.get("confidence", 0.0),
@@ -187,6 +288,11 @@ def _legacy_detection_from_metadata_object(item: dict[str, Any]) -> dict[str, An
         "zone_violation": any(hit.get("rule_result") == "prohibited" for hit in item.get("zone_hits", [])),
         "zone_name": next((hit.get("zone_name") for hit in item.get("zone_hits", []) if hit.get("zone_name")), None),
         "zone_id": next((hit.get("zone_id") for hit in item.get("zone_hits", []) if hit.get("zone_id")), None),
+        "bbox_xyxy_norm": item.get("bbox_xyxy_norm") or item.get("bbox"),
+        "zone_eval_method": item.get("zone_eval_method"),
+        "zone_overlap_ratio": item.get("zone_overlap_ratio"),
+        "detection_frame_id": item.get("detection_frame_id"),
+        "track_id": item.get("track_id"),
     }
 
 
@@ -200,6 +306,8 @@ def _persist_violation_event(
     source_timestamp_seconds: float | None = None,
 ) -> EventModel | None:
     cls_name = detection.get("object_class", "person")
+    if cls_name in _DETECT_ONLY_CLASSES:
+        return None
     zone_id = detection.get("zone_id")
     if event_manager.is_duplicate(camera_id, zone_id, cls_name):
         return None
@@ -211,11 +319,9 @@ def _persist_violation_event(
             event_timestamp = timestamp.replace(tzinfo=timezone.utc).astimezone(ICT_TZ)
         else:
             event_timestamp = timestamp.astimezone(ICT_TZ)
-    video_clip_url = event_manager.slice_10s_ring_buffer_clip(
+    video_clip_url = event_manager.evidence_clip_url(
         camera_id,
         timestamp=event_timestamp.timestamp(),
-        source_video_path=source_video_path or resolve_video_path(camera_id),
-        source_timestamp_seconds=source_timestamp_seconds,
     )
     event_repo = EventRepository(db)
     event = EventModel(
@@ -258,16 +364,14 @@ def _persist_violation_event(
         "snapshot_url": created_event.crop_image_url or "/media/crops/crop_live.jpg",
     }
 
-    try:
-        dispatch_res = alert_dispatcher.send_telegram_notification_sync(event_payload)
-        _event_telegram_status_cache[created_event.id] = dispatch_res
-    except Exception as exc:
-        logger.error(f"Telegram notification dispatch exception for event {created_event.id}: {exc}")
-        _event_telegram_status_cache[created_event.id] = {
-            "status": "failed",
-            "error": "NETWORK_ERROR",
-            "dispatched_at": None,
-        }
+    _schedule_violation_evidence_alert_job(
+        event_id=created_event.id,
+        camera_id=camera_id,
+        event_timestamp=event_timestamp,
+        source_video_path=source_video_path,
+        source_timestamp_seconds=source_timestamp_seconds,
+        event_payload=event_payload,
+    )
 
     return created_event
 
@@ -277,14 +381,23 @@ def persist_area_metadata_violations(
     *,
     camera_id: str,
     metadata_event: dict[str, Any],
+    source_video_path: str | None = None,
+    source_timestamp_seconds: float | None = None,
 ) -> list[EventModel]:
-    captured_at = metadata_event.get("payload", {}).get("captured_at")
+    payload = metadata_event.get("payload", {})
+    captured_at = payload.get("captured_at")
     event_timestamp = None
     if captured_at:
         event_timestamp = datetime.fromisoformat(str(captured_at).replace("Z", "+00:00"))
 
+    event_source_timestamp_seconds = source_timestamp_seconds
+    if event_source_timestamp_seconds is None:
+        event_source_timestamp_seconds = payload.get("source_timestamp_seconds")
+
     persisted = []
-    for item in metadata_event.get("payload", {}).get("objects", []):
+    for item in payload.get("objects", []):
+        if item.get("object_class") in _DETECT_ONLY_CLASSES:
+            continue
         if not any(hit.get("rule_result") == "prohibited" for hit in item.get("zone_hits", [])):
             continue
         event = _persist_violation_event(
@@ -292,7 +405,8 @@ def persist_area_metadata_violations(
             camera_id=camera_id,
             detection=_legacy_detection_from_metadata_object(item),
             timestamp=event_timestamp,
-            source_video_path=resolve_video_path(camera_id),
+            source_video_path=source_video_path or resolve_video_path(camera_id),
+            source_timestamp_seconds=event_source_timestamp_seconds,
         )
         if event is not None:
             persisted.append(event)
@@ -445,7 +559,7 @@ def _persist_lpr_passage_event(
                 source_video_path=source_video_path,
                 source_timestamp_seconds=source_timestamp_seconds,
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - LPR event must survive clip extraction failure
             # Không cắt được clip chứng cứ vẫn phải ghi được lượt xe: mất một video
             # còn hơn mất cả bản ghi biển số.
             logger.warning("Không cắt được clip chứng cứ LPR cho %s: %s", plate_text, exc)
@@ -718,13 +832,20 @@ def get_event_evidence(
 @router.get("/video-feed")
 def video_feed(
     camera_id: str = Query("BAI-KIEM", description="Mã camera cần stream video real-time"),
-    conf_threshold: float = Query(0.50, ge=0.0, le=1.0, description="Ngưỡng tự tin nhận diện AI (0.0 - 1.0)"),
+    conf_threshold: float = Query(settings.DETECTION_CONFIDENCE_THRESHOLD, ge=0.0, le=1.0, description="Ngưỡng hiển thị/debug bbox, không phải ngưỡng sinh event/cảnh báo"),
     draw_zones: bool = Query(True, description="Vẽ polygon zone trực tiếp lên MJPEG"),
+    show_static_containers: bool = Query(False, description="Bật bbox container/shipping_container để debug model"),
     db: Session = Depends(get_db),  # noqa: B008
 ):
     """
     Stream video real-time (MJPEG) đã được vẽ Bounding Box, Polygon Zone và nhãn cảnh báo vi phạm trực tiếp lên khung hình.
     """
+    try:
+        display_conf_threshold = float(conf_threshold)
+    except (TypeError, ValueError):
+        display_conf_threshold = float(settings.DETECTION_CONFIDENCE_THRESHOLD)
+    render_static_containers = show_static_containers if isinstance(show_static_containers, bool) else False
+
     def encode_mjpeg_chunk(snapshot: Any, zone_state: Any) -> bytes | None:
         frame = snapshot.frame.copy() if hasattr(snapshot.frame, "copy") else snapshot.frame
 
@@ -764,12 +885,12 @@ def video_feed(
         # Detection metadata comes from this exact decoded frame snapshot.
         detections = [
             d for d in snapshot.detections
-            if float(d.get("confidence", 0.0)) >= conf_threshold
+            if float(d.get("confidence", 0.0)) >= display_conf_threshold
         ]
 
         # 3. Draw Bounding Boxes and Labels on Frame
         for d in detections:
-            if d.get("object_class") in _MJPEG_HIDDEN_BBOX_CLASSES:
+            if not render_static_containers and d.get("object_class") in _MJPEG_HIDDEN_BBOX_CLASSES:
                 continue
 
             bbox = d.get("bbox", [0, 0, 0, 0])
@@ -949,7 +1070,9 @@ def get_live_detections(
                 if vision_pipeline.evaluate_bbox_center_in_zone(bbox, polygon):
                     matched_zone_name = z["name"]
                     matched_zone_id = z.get("id")
-                    if cls_name in forbidden or (allowed and cls_name not in allowed):
+                    is_forbidden = vision_pipeline.zone_rule_matches_class(cls_name, forbidden)
+                    is_allowed = vision_pipeline.zone_rule_matches_class(cls_name, allowed)
+                    if is_forbidden or (allowed and not is_allowed):
                         is_violation = True
                         severity = 3
                         break
@@ -1005,7 +1128,7 @@ def get_live_detections(
             status_text = "CẢNH BÁO VI PHẠM ZONE"
             source_timestamp_seconds = video_time
             if source_timestamp_seconds is None and snapshot is not None:
-                source_timestamp_seconds = snapshot.source_timestamp_seconds
+                source_timestamp_seconds = snapshot.detection_source_timestamp_seconds
             _persist_violation_event(
                 db,
                 camera_id=camera_id,
@@ -1023,10 +1146,17 @@ def get_live_detections(
         formatted_detections.append({
             "id": d.get("id", f"det-{uuid.uuid4().hex[:6]}"),
             "object_class": cls_name,
+            "raw_class": d.get("raw_class"),
+            "canonical_class": d.get("canonical_class") or cls_name,
             "vietnamese_name": vn_name,
             "label": label,
             "confidence": d.get("confidence", 0.95),
             "bbox": d.get("bbox", [20, 20, 20, 20]),
+            "bbox_xyxy_norm": d.get("bbox_xyxy_norm"),
+            "zone_eval_method": d.get("zone_eval_method"),
+            "zone_overlap_ratio": d.get("zone_overlap_ratio"),
+            "detection_frame_id": d.get("detection_frame_id"),
+            "track_id": d.get("track_id"),
             "severity": severity,
             "zone_violation": is_violation,
             "zone_name": zone_name

@@ -1,9 +1,9 @@
 ---
 artifact: API-CONTRACT.md
-version: 1.4.0
+version: 1.5.0
 owner: design-api
 status: approved
-updated_at: "2026-08-24T22:43:00+07:00"
+updated_at: "2026-08-27T20:10:00+07:00"
 linked_requirements:
   - REQ-001
   - REQ-002
@@ -19,11 +19,12 @@ linked_requirements:
   - CR-003
   - CR-004
   - CR-005
+  - CR-007
 ---
 
-# Hợp Đồng REST API & WebSocket Event Payload (SentriAI Mini — CR-001, CR-002, CR-003, CR-004 & CR-005)
+# Hợp Đồng REST API & WebSocket Event Payload (SentriAI Mini — CR-001, CR-002, CR-003, CR-004, CR-005 & CR-007)
 
-Tài liệu quy định chuẩn hợp đồng REST API Foundation toàn cục và giao thức WebSocket real-time cho hệ thống Giám sát Camera AI (SentriAI Mini), hỗ trợ đầy đủ quy tắc nghiệp vụ CR-001 (Phân loại 8 nhóm đối tượng, Xe quen/Xe lạ, SVG Canvas 4 thao tác, BBox Dataset Collector), CR-002 (React Framework & YOLOv26), CR-003 (Area realtime metadata lane + in-memory zone cache), CR-004 (real object labeling flow với media import, persisted bbox samples, label CRUD/soft delete/restore, và sync zone rules), và CR-005 (Telegram evidence notification vi phạm khu vực với thời gian vi phạm đúng, camera, zone, loại đối tượng, lý do vi phạm, video clip chứng cứ 10s MP4, và trạng thái gửi Telegram).
+Tài liệu quy định chuẩn hợp đồng REST API Foundation toàn cục và giao thức WebSocket real-time cho hệ thống Giám sát Camera AI (SentriAI Mini), hỗ trợ đầy đủ quy tắc nghiệp vụ CR-001 (Phân loại 8 nhóm đối tượng, Xe quen/Xe lạ, SVG Canvas 4 thao tác, BBox Dataset Collector), CR-002 (React Framework), CR-003 (Area realtime metadata lane + in-memory zone cache), CR-004 (real object labeling flow với media import, persisted bbox samples, label CRUD/soft delete/restore, và sync zone rules), CR-005 (Telegram evidence notification vi phạm khu vực), và CR-007 (YOLOv11s finetune cho Area Monitoring, threshold layering, bbox debug container, class-aware zone evaluation và optional tracking readiness).
 
 ---
 
@@ -51,6 +52,7 @@ Tài liệu quy định chuẩn hợp đồng REST API Foundation toàn cục v�
 | **Dataset Samples** | `DELETE` | `/api/v1/dataset/samples/{sample_id}` | Xóa sample và recompute `sample_count` của label liên quan. | Admin |
 | **Dataset Sync** | `POST` | `/api/v1/dataset/sync-zones` | Đồng bộ active custom labels vào zone rules và refresh zone cache. | Admin |
 | **Events** | `GET` | `/api/v1/events?severity_level={level}` | Lấy nhật ký sự kiện LPR và vi phạm khu vực có kèm evidence fields & telegram_status. | Viewer / Admin |
+| **Events Video Feed** | `GET` | `/api/v1/events/video-feed?camera_id=BAI-KIEM&conf_threshold={0..1}&show_static_containers=false` | MJPEG stream cho dashboard; `conf_threshold` là ngưỡng hiển thị bbox/debug, không tự sinh event/cảnh báo; `show_static_containers` bật bbox container/shipping_container khi debug model. | Viewer / Admin |
 | **Events Evidence** | `GET` | `/api/v1/events/{event_id}/evidence` | Lấy chi tiết bằng chứng vi phạm của sự kiện gồm 10s video clip URL và nhật ký Telegram. | Viewer / Admin |
 | **Alerts Test** | `POST` | `/api/v1/alerts/telegram/test` | Kiểm tra kết nối Telegram Bot API và gửi tin nhắn thử nghiệm từ Admin. | Admin |
 | **Chatbot** | `POST` | `/api/v1/chatbot/query` | Truy vấn trợ lý AI tiếng Việt, trả về kết quả số liệu kèm đính kèm video clip 10s. | Viewer / Admin |
@@ -70,6 +72,7 @@ Tài liệu quy định chuẩn hợp đồng REST API Foundation toàn cục v�
 - `realtime metadata lane`: Phục vụ overlay, trạng thái đối tượng, zone hit và KPI gần realtime cho `Area Security Dashboard`.
 - `event/alert lane`: Chỉ phát sinh sau khi qua luật nghiệp vụ, severity classification và cooldown/dedup; được dùng cho Event Feed, audio beep và notification.
 - Backward compatibility: `LPR_DETECTION_EVENT`, `ZONE_VIOLATION_EVENT` và `ALERT_LEVEL_3_NOTIFICATION` được giữ nguyên vai trò. `AREA_FRAME_METADATA` là bổ sung additive cho CR-003.
+- CR-007 threshold rules: `video stream lane` có thể hiển thị detection ở ngưỡng thấp hơn để debug/quan sát. `event/alert lane` chỉ nhận object đã qua application/per-class threshold, class filter, zone evaluation theo class và kiểm tra ổn định ngắn. Việc hiển thị bbox trên MJPEG không tự kích hoạt audio, popup hoặc Telegram.
 
 ---
 
@@ -120,14 +123,22 @@ Tài liệu quy định chuẩn hợp đồng REST API Foundation toàn cục v�
     {
       "track_id": "trk-001",
       "object_class": "forklift",
+      "raw_class": "forklift",
+      "canonical_class": "forklift",
       "confidence": 0.94,
       "bbox": [0.18, 0.32, 0.41, 0.76],
+      "bbox_xyxy_norm": [0.18, 0.32, 0.41, 0.76],
       "center_point": { "x": 0.295, "y": 0.54 },
+      "zone_eval_method": "footprint_overlap",
+      "zone_overlap_ratio": 0.62,
+      "detection_frame_id": "BAI-KIEM-1724148600-000321",
       "zone_hits": [
         {
           "zone_id": "zone-a",
           "zone_name": "Khu xe nang",
-          "rule_result": "allowed"
+          "rule_result": "allowed",
+          "zone_eval_method": "footprint_overlap",
+          "zone_overlap_ratio": 0.62
         }
       ]
     }
@@ -140,6 +151,14 @@ Tài liệu quy định chuẩn hợp đồng REST API Foundation toàn cục v�
   }
 }
 ```
+
+CR-007 additive field rules:
+- `bbox` giữ nguyên dạng normalized `[x_min, y_min, x_max, y_max]` để tương thích với frontend hiện tại.
+- `track_id` là optional/future-compatible; consumer phải hoạt động khi field vắng mặt hoặc `null`.
+- `raw_class` giữ class gốc từ YOLOv11s finetune; `canonical_class` là class chuẩn hóa để so rule zone. `object_class` giữ vai trò field tương thích và nên bằng `canonical_class`.
+- `zone_eval_method` có giá trị `bottom_center`, `footprint_overlap`, `bbox_overlap_ratio`, `center_point_fallback` hoặc `none`.
+- `zone_overlap_ratio` là số `[0,1]` khi method dùng overlap; `null` khi không áp dụng.
+- `detection_frame_id` giúp debug tương quan giữa metadata lane và renderer.
 
 ### 3.4 Zone Cache Runtime Semantics
 - Mỗi camera có một `zone_version` tăng dần sau mọi thao tác CRUD zone thành công.
@@ -309,4 +328,3 @@ Rules:
 - `telegram_error`: `null` khi gửi thành công; chuỗi mã lỗi (`BOT_TOKEN_INVALID`, `CHAT_ID_NOT_FOUND`, `TELEGRAM_API_TIMEOUT`, `RATE_LIMITED`, `VIDEO_CLIP_UNAVAILABLE`, `PAYLOAD_TOO_LARGE`, `NETWORK_ERROR`) khi thất bại.
 - Telegram Bot gửi trực tiếp tin nhắn HTML kèm file đính kèm `video_clip_url` (10s MP4 file).
 - Lỗi gửi Telegram không được hủy giao dịch lưu sự kiện hoặc chặn tín hiệu WebSocket đẩy về UI Web.
-

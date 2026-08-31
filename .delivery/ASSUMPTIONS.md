@@ -1,9 +1,9 @@
 ---
 artifact: ASSUMPTIONS.md
-version: 1.1.0
+version: 1.2.0
 owner: collect-requirements
 status: in-review
-updated_at: "2026-08-24T22:06:32+07:00"
+updated_at: "2026-08-27T19:49:34+07:00"
 ---
 
 # Danh sách Giả định Hệ thống SentriAI Mini
@@ -34,3 +34,12 @@ CR-004 chưa thêm mô hình phân quyền mới. Mọi người dùng truy cậ
 - Status: validated
 
 Nhãn custom mới trong CR-004 chỉ cam kết quản lý dataset và zone rules. Hệ thống chưa bắt buộc AI realtime nhận diện class custom ngay nếu chưa có model đã huấn luyện.
+
+## ASSUMPTION-004 Model Area Monitoring đã finetune có class tương đương nghiệp vụ
+
+- Impact: High
+- Confidence: Medium
+- Validation method: Kiểm tra `model.names`, log raw class trong detection metadata và chạy video validation cho `BAI-KIEM`.
+- Status: open
+
+CR-007 giả định model YOLOv11s finetune đang dùng cho Area Monitoring có các class hoặc class tương đương với người, container/shipping_container, xe tải/container-truck, xe nâng, xe cẩu, xe con, xe máy và xe đạp. Nếu `model.names` khác kỳ vọng, mapping canonical/debug metadata phải được hiệu chỉnh mà không đổi phạm vi LPR.

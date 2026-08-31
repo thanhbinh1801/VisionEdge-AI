@@ -303,6 +303,29 @@ def get_source(source_id: str, db: Session = Depends(get_db)):
     return _envelope({"source": _source_json(source)})
 
 
+@router.delete("/sources/{source_id}")
+def delete_source(source_id: str, db: Session = Depends(get_db)):
+    try:
+        repo = DatasetRepository(db)
+        source = repo.get_source(source_id)
+        if not source:
+            return _error_response(DatasetError("NOT_FOUND", "Source not found."))
+
+        source_dir = _managed_path(source.storage_path).parent if source.storage_path else None
+        deleted_source, affected_label_ids, deleted_sample_count = repo.delete_source(source_id)
+        labels = CustomLabelRepository(db).get_all(include_deleted=True)
+        if source_dir:
+            shutil.rmtree(source_dir, ignore_errors=True)
+        return _envelope({
+            "deleted_id": deleted_source.id,
+            "deleted_sample_count": deleted_sample_count,
+            "labels": [_label_json(label) for label in labels],
+        })
+    except DatasetError as exc:
+        db.rollback()
+        return _error_response(exc)
+
+
 @router.get("/sources/{source_id}/frame")
 def get_source_frame(source_id: str, frame_index: Optional[int] = Query(None, ge=0), timestamp: Optional[float] = Query(None, ge=0), db: Session = Depends(get_db)):
     if frame_index is not None and timestamp is not None:

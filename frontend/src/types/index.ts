@@ -47,19 +47,27 @@ export interface ZoneCacheInfo {
 }
 
 export interface AreaMetadataObject {
-  track_id: string;
+  track_id?: string | null;
   object_class: string;
+  raw_class?: string;
+  canonical_class?: string;
   display_name?: string;
   confidence: number;
   bbox: [number, number, number, number];
+  bbox_xyxy_norm?: [number, number, number, number];
   center_point: {
     x: number;
     y: number;
   };
+  zone_eval_method?: 'bottom_center' | 'footprint_overlap' | 'bbox_overlap_ratio' | 'center_point_fallback' | 'none';
+  zone_overlap_ratio?: number | null;
+  detection_frame_id?: string;
   zone_hits: Array<{
     zone_id: string;
     zone_name: string;
     rule_result: 'allowed' | 'prohibited' | 'observed';
+    zone_eval_method?: 'bottom_center' | 'footprint_overlap' | 'bbox_overlap_ratio' | 'center_point_fallback' | 'none';
+    zone_overlap_ratio?: number | null;
   }>;
 }
 

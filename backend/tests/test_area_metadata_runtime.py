@@ -8,8 +8,8 @@ from backend.app.services.area_metadata import build_area_metadata_event
 from backend.app.services.video_stream import ProcessedFrameSnapshot
 from backend.app.services.zone_cache import ZoneCacheState, zone_cache_service
 from backend.database.engine import SessionLocal, get_sqlite_engine, init_db
-from backend.tests.conftest import SCHEMA_SQL_PATH
 from backend.database.models import Camera, Zone
+from backend.tests.conftest import SCHEMA_SQL_PATH
 
 TEST_DB_URL = "sqlite:///./test_area_metadata_runtime.db"
 
@@ -42,15 +42,22 @@ def test_build_area_metadata_event_uses_normalized_payload():
             {
                 "id": "det-01",
                 "object_class": "forklift",
+                "raw_class": "reach stacker",
+                "canonical_class": "forklift",
                 "vietnamese_name": "Xe nâng",
                 "confidence": 0.95,
                 "bbox": [10.0, 20.0, 30.0, 40.0],
+                "bbox_xyxy_norm": [0.1, 0.2, 0.4, 0.6],
+                "zone_eval_method": "footprint_overlap",
+                "zone_overlap_ratio": 0.62,
+                "detection_frame_id": "det-frame-7",
                 "zone_violation": True,
                 "zone_name": "Khu xe nâng",
                 "zone_id": "zone-1",
             },
         ),
         pipeline_latency_ms=42.5,
+        detection_source_timestamp_seconds=8.0,
     )
     zone_state = ZoneCacheState(
         camera_id="BAI-KIEM",
@@ -69,8 +76,16 @@ def test_build_area_metadata_event_uses_normalized_payload():
 
     assert event["event_type"] == "AREA_FRAME_METADATA"
     assert event["payload"]["zone_version"] == 3
+    assert event["payload"]["source_timestamp_seconds"] == 8.0
     assert event["payload"]["kpi_delta"]["area_zone_violations"] == 1
     assert event["payload"]["objects"][0]["bbox"] == [0.1, 0.2, 0.4, 0.6]
+    assert event["payload"]["objects"][0]["bbox_xyxy_norm"] == [0.1, 0.2, 0.4, 0.6]
+    assert event["payload"]["objects"][0]["raw_class"] == "reach stacker"
+    assert event["payload"]["objects"][0]["canonical_class"] == "forklift"
+    assert event["payload"]["objects"][0]["zone_eval_method"] == "footprint_overlap"
+    assert event["payload"]["objects"][0]["zone_overlap_ratio"] == 0.62
+    assert event["payload"]["objects"][0]["detection_frame_id"] == "det-frame-7"
+    assert event["payload"]["objects"][0]["zone_hits"][0]["zone_eval_method"] == "footprint_overlap"
 
 
 def test_zone_cache_refresh_increments_version(db_session):
@@ -105,9 +120,13 @@ def test_metadata_lane_is_separate_from_event_persistence():
             {
                 "id": "det-1",
                 "object_class": "forklift",
+                "raw_class": "forklift",
+                "canonical_class": "forklift",
                 "vietnamese_name": "Xe nâng",
                 "confidence": 0.9,
                 "bbox": [10.0, 20.0, 30.0, 40.0],
+                "zone_eval_method": "footprint_overlap",
+                "zone_overlap_ratio": 0.4,
                 "zone_violation": True,
                 "zone_name": "Yard A",
                 "zone_id": "zone-a",

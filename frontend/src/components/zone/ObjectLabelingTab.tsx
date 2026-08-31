@@ -4,6 +4,7 @@ import {
   createDatasetLabel,
   deleteDatasetLabel,
   deleteDatasetSample,
+  deleteDatasetSource,
   fetchDatasetFrame,
   fetchDatasetLabels,
   fetchDatasetSamples,
@@ -279,6 +280,35 @@ export const ObjectLabelingTab: React.FC = () => {
     }
   };
 
+  const handleDeleteSource = async (source: DatasetSource) => {
+    const sourceSamples = samples.filter((sample) => sample.source_id === source.id).length +
+      pendingSamples.filter((sample) => sample.source_id === source.id).length;
+    const confirmed = window.confirm(
+      `Xóa media "${source.name}"? ${sourceSamples > 0 ? `${sourceSamples} sample đang hiển thị/pending sẽ bị xóa.` : 'Các sample đã lưu liên quan cũng sẽ bị xóa nếu có.'}`,
+    );
+    if (!confirmed) return;
+
+    setSaving(true);
+    setError('');
+    try {
+      const result = await deleteDatasetSource(source.id);
+      setPendingSamples((current) => current.filter((sample) => sample.source_id !== source.id));
+      setSelectedSampleId('');
+      if (source.id === selectedSourceId) {
+        setSelectedSourceId('');
+        setFrameSrc('');
+        setFrameStatus('idle');
+      }
+      setLabels(result.labels);
+      await refreshSources();
+      setMessage(`Đã xóa media "${source.name}" và ${result.deleted_sample_count} sample đã lưu.`);
+    } catch (deleteError) {
+      setError(getErrorMessage(deleteError));
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const handleCreateLabel = async () => {
     const labelName = newLabelName.trim();
     if (!labelName) {
@@ -538,30 +568,58 @@ export const ObjectLabelingTab: React.FC = () => {
             </div>
           )}
           {sources.map((source) => (
-            <button
-              key={source.id}
-              type="button"
-              onClick={() => setSelectedSourceId(source.id)}
-              style={{
-                position: 'relative',
-                flex: 'none',
-                width: '132px',
-                height: '76px',
-                borderRadius: '8px',
-                border: `2px solid ${source.id === selectedSourceId ? 'var(--acc)' : 'var(--line)'}`,
-                background: '#0c0f13',
-                color: 'var(--ink)',
-                cursor: 'pointer',
-                overflow: 'hidden',
-                padding: '8px',
-                textAlign: 'left',
-              }}
-            >
-              <span style={{ fontSize: '10px', fontWeight: 700 }}>{source.kind === 'video' ? 'VIDEO' : 'IMAGE'}</span>
-              <span style={{ position: 'absolute', left: '8px', right: '8px', bottom: '8px', fontSize: '10px', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                {source.name}
-              </span>
-            </button>
+            <div key={source.id} style={{ position: 'relative', flex: 'none', width: '132px', height: '76px' }}>
+              <button
+                type="button"
+                onClick={() => setSelectedSourceId(source.id)}
+                style={{
+                  position: 'absolute',
+                  inset: 0,
+                  width: '100%',
+                  height: '100%',
+                  borderRadius: '8px',
+                  border: `2px solid ${source.id === selectedSourceId ? 'var(--acc)' : 'var(--line)'}`,
+                  background: '#0c0f13',
+                  color: 'var(--ink)',
+                  cursor: 'pointer',
+                  overflow: 'hidden',
+                  padding: '8px',
+                  textAlign: 'left',
+                }}
+              >
+                <span style={{ fontSize: '10px', fontWeight: 700 }}>{source.kind === 'video' ? 'VIDEO' : 'IMAGE'}</span>
+                <span style={{ position: 'absolute', left: '8px', right: '8px', bottom: '8px', fontSize: '10px', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  {source.name}
+                </span>
+              </button>
+              <button
+                type="button"
+                aria-label={`Xóa media ${source.name}`}
+                title="Xóa media đã import"
+                disabled={saving}
+                onClick={() => handleDeleteSource(source)}
+                style={{
+                  position: 'absolute',
+                  top: '6px',
+                  right: '6px',
+                  width: '22px',
+                  height: '22px',
+                  borderRadius: '6px',
+                  border: '1px solid rgba(255,255,255,.28)',
+                  background: 'rgba(0,0,0,.62)',
+                  color: '#fff',
+                  display: 'grid',
+                  placeItems: 'center',
+                  fontSize: '14px',
+                  fontWeight: 800,
+                  lineHeight: 1,
+                  cursor: saving ? 'not-allowed' : 'pointer',
+                  padding: 0,
+                }}
+              >
+                ×
+              </button>
+            </div>
           ))}
         </div>
 
