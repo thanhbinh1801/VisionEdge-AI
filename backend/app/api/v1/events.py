@@ -888,6 +888,11 @@ def video_feed(
             if float(d.get("confidence", 0.0)) >= display_conf_threshold
         ]
 
+        label_font_scale = 0.72
+        label_thickness = 2
+        label_padding_x = 8
+        label_padding_y = 6
+
         # 3. Draw Bounding Boxes and Labels on Frame
         for d in detections:
             if not render_static_containers and d.get("object_class") in _MJPEG_HIDDEN_BBOX_CLASSES:
@@ -905,17 +910,34 @@ def video_feed(
 
             if is_violation:
                 box_color = (0, 0, 255)  # Red (BGR)
-                label = f"{vn_name.upper()} - VI PHAM ZONE"
+                label = f"{vn_name.upper()} - VI PHẠM"
                 if zone_name:
                     label += f" ({zone_name})"
             else:
                 box_color = (0, 255, 0)  # Green (BGR)
-                label = f"{vn_name.upper()} - DUOC PHEAP"
+                label = f"{vn_name.upper()} -ĐƯỢC PHÉP"
 
             cv2.rectangle(frame, (x, y), (x + bw, y + bh), box_color, 2)
-            (tw, _th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.45, 1)
-            cv2.rectangle(frame, (x, max(0, y - 20)), (x + tw + 10, y), box_color, -1)
-            cv2.putText(frame, label, (x + 5, max(12, y - 5)), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 0), 1)
+            (tw, th), baseline = cv2.getTextSize(
+                label,
+                cv2.FONT_HERSHEY_SIMPLEX,
+                label_font_scale,
+                label_thickness,
+            )
+            label_height = th + baseline + label_padding_y * 2
+            label_width = tw + label_padding_x * 2
+            label_top = max(0, y - label_height)
+            label_bottom = min(h, label_top + label_height)
+            cv2.rectangle(frame, (x, label_top), (min(w, x + label_width), label_bottom), box_color, -1)
+            cv2.putText(
+                frame,
+                label,
+                (x + label_padding_x, max(th + label_padding_y, label_bottom - baseline - label_padding_y)),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                label_font_scale,
+                (0, 0, 0),
+                label_thickness,
+            )
 
         ret, jpeg_buf = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
         if not ret:
